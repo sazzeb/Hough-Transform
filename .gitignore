@@ -1,0 +1,52 @@
+# MATLAB autosave and backup files
+*.asv
+*.m~
+*.autosave
+
+# MATLAB temporary files
+*.tmp
+*.temp
+*.log
+
+# MATLAB cache and generated files
+slprj/
+sfprj/
+codegen/
+work/
+*.slxc
+*.mex*
+*.p
+
+# MATLAB editor and project settings
+*.prj.user
+*.mlproj.user
+*.mldatx.autosave
+
+# Simulink generated files
+*_grt_rtw/
+*_ert_rtw/
+*.slx.r*
+
+# MATLAB test results
+TestResults/
+coverage/
+html/
+
+# macOS files
+.DS_Store
+.AppleDouble
+.Spotlight-V100
+.Trashes
+
+# IDE settings
+.idea/
+.vscode/
+
+# Python cache, if used
+__pycache__/
+*.pyc
+
+# Local environments
+.venv/
+venv/
+
