@@ -12,15 +12,15 @@ from watermark_core import WatermarkEngine
 
 
 PALETTE = {
-    "background": "#F3F6FA",
+    "background": "#FFFFFF",
     "surface": "#FFFFFF",
-    "header": "#14263D",
-    "text": "#172B46",
-    "muted": "#60718A",
-    "border": "#DCE4EE",
-    "accent": "#2458A6",
-    "accent_hover": "#194783",
-    "success": "#167458",
+    "header": "#266435",
+    "text": "#000000",
+    "muted": "#333333",
+    "border": "#266435",
+    "accent": "#266435",
+    "accent_hover": "#1D4F2A",
+    "success": "#266435",
 }
 
 
@@ -180,7 +180,7 @@ class WatermarkApp:
     def __init__(self, root: tk.Tk):
         self.root = root
 
-        self.root.title("Wavelet Watermarking")
+        self.root.title("Wavelet Watermark Studio")
         self.root.geometry("1180x790")
         self.root.minsize(900, 680)
         self.root.configure(bg=PALETTE["background"])
@@ -228,14 +228,14 @@ class WatermarkApp:
             header,
             text="IMAGE LAB  /  WAVELET WATERMARKING",
             bg=PALETTE["header"],
-            fg="#9DBBE5",
+            fg=PALETTE["surface"],
             font=("Helvetica", 10, "bold"),
             anchor="w",
         ).pack(fill="x", padx=24, pady=(16, 2))
 
         tk.Label(
             header,
-            text="Embed, inspect, and recover an image watermark",
+            text="Hide an image. Recover it. See every step.",
             bg=PALETTE["header"],
             fg=PALETTE["surface"],
             font=("Helvetica", 17, "bold"),
@@ -262,21 +262,21 @@ class WatermarkApp:
 
         self._section(controls, "QUICK START")
         self._button(
-            controls, "sample", "Try example", self.try_sample,
+            controls, "sample", "Try an example", self.try_sample,
             primary=True,
         )
 
         self._section(controls, "01  INPUT IMAGES")
         self._button(
-            controls, "cover", "Load cover image",
+            controls, "cover", "Choose original image",
             lambda: self.load("cover"),
         )
         self._button(
-            controls, "watermark", "Load watermark image",
+            controls, "watermark", "Choose image to hide",
             lambda: self.load("watermark"),
         )
         self._button(
-            controls, "watermarked", "Open saved PNG",
+            controls, "watermarked", "Choose watermarked PNG",
             lambda: self.load("watermarked"),
         )
 
@@ -290,11 +290,11 @@ class WatermarkApp:
 
         self._section(controls, "03  PROCESS")
         self._button(
-            controls, "embed", "Embed and verify", self.embed,
+            controls, "embed", "Create watermarked image", self.embed,
             primary=True,
         )
         self._button(
-            controls, "extract", "Extract from PNG", self.extract,
+            controls, "extract", "Recover watermark", self.extract,
         )
 
         self._section(controls, "04  SAVE RESULTS")
@@ -303,7 +303,7 @@ class WatermarkApp:
             lambda: self.save("watermarked"),
         )
         self._button(
-            controls, "save_mark", "Save extracted PNG",
+            controls, "save_mark", "Save recovered watermark",
             lambda: self.save("extracted"),
         )
 
@@ -311,10 +311,10 @@ class WatermarkApp:
         previews.grid(row=0, column=1, sticky="nsew")
 
         captions = (
-            ("cover", "Cover image", "Load a cover image"),
-            ("watermark", "Watermark input", "Load a watermark image"),
+            ("cover", "Original image", "Choose an original image"),
+            ("watermark", "Image to hide", "Choose an image to hide"),
             ("watermarked", "Watermarked image", "Embed to see the result"),
-            ("extracted", "Extracted watermark", "Recover a watermark"),
+            ("extracted", "Recovered watermark", "Recover a watermark"),
         )
 
         for index, (name, caption, placeholder) in enumerate(captions):
@@ -398,7 +398,7 @@ class WatermarkApp:
             "Secondary.TButton",
             background=[
                 ("disabled", PALETTE["surface"]),
-                ("active", "#E8EFF9"),
+                ("active", "#E8F1E9"),
             ],
             foreground=[("disabled", PALETTE["muted"])],
         )
