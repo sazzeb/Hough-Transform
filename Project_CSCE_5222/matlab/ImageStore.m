@@ -1,5 +1,11 @@
 
 classdef ImageStore
+    properties (Constant)
+        MaxWorkingPixels = 12000000
+        MaxSourcePixels = 100000000
+        MaxWatermarkedPixels = 24000000
+    end
+
     methods (Static)
         function imageData = read(filename, isWatermarked)
             if nargin < 2
@@ -38,10 +44,18 @@ classdef ImageStore
                     'Use a single-frame image.');
             end
 
-            if double(info.Width) * double(info.Height) > 24000000
+            sourcePixels = double(info.Width) * double(info.Height);
+
+            if isWatermarked && ...
+                    sourcePixels > ImageStore.MaxWatermarkedPixels
                 error('Watermark:Image', ...
-                    ['The image is too large to process safely. ' ...
-                     'Choose an image of 24 megapixels or less.']);
+                    ['The watermarked PNG exceeds 24 megapixels. ' ...
+                     'Extraction requires the original pixel dimensions.']);
+            end
+
+            if sourcePixels > ImageStore.MaxSourcePixels
+                error('Watermark:Image', ...
+                    'The source image exceeds the 100 megapixel safety limit.');
             end
 
             format = lower(info.Format);
@@ -83,6 +97,26 @@ classdef ImageStore
                 if ~isa(raw, 'uint8') && ~islogical(raw)
                     error('Watermark:File', ...
                         'Convert the input to an 8-bit image before loading.');
+                end
+
+                if sourcePixels > ImageStore.MaxWorkingPixels
+                    scale = sqrt( ...
+                        ImageStore.MaxWorkingPixels / sourcePixels);
+                    workingHeight = max(1, floor(double(info.Height) * scale));
+                    workingWidth = max(1, floor(double(info.Width) * scale));
+
+                    if isempty(map)
+                        raw = imresize(raw, ...
+                            [workingHeight workingWidth], 'bilinear');
+                    else
+                        raw = imresize(raw, ...
+                            [workingHeight workingWidth], 'nearest');
+                    end
+
+                    if ~isempty(alpha)
+                        alpha = imresize(alpha, ...
+                            [workingHeight workingWidth], 'bilinear');
+                    end
                 end
 
                 if ~isempty(map)

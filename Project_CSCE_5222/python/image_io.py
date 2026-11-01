@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import tempfile
+from math import sqrt
 
 import numpy as np
 from PIL import Image
@@ -15,7 +16,9 @@ from watermark_core import (
 class ImageStore:
     """Read supported inputs and save verified, lossless PNG outputs."""
 
-    MAX_INPUT_PIXELS = 24_000_000
+    MAX_WORKING_PIXELS = 12_000_000
+    MAX_SOURCE_PIXELS = 100_000_000
+    MAX_WATERMARKED_PIXELS = 24_000_000
 
     @staticmethod
     def read(
@@ -25,10 +28,17 @@ class ImageStore:
         path = Path(path)
 
         with Image.open(path) as source:
-            if source.width * source.height > ImageStore.MAX_INPUT_PIXELS:
+            source_pixels = source.width * source.height
+
+            if watermarked and source_pixels > ImageStore.MAX_WATERMARKED_PIXELS:
                 raise WatermarkError(
-                    "The image is too large to process safely. "
-                    "Choose an image of 24 megapixels or less."
+                    "The watermarked PNG exceeds 24 megapixels. "
+                    "Extraction requires the original pixel dimensions."
+                )
+
+            if source_pixels > ImageStore.MAX_SOURCE_PIXELS:
+                raise WatermarkError(
+                    "The source image exceeds the 100 megapixel safety limit."
                 )
 
             if source.format not in {"PNG", "JPEG", "BMP"}:
@@ -63,48 +73,68 @@ class ImageStore:
 
                 result = np.asarray(source).copy()
 
-            elif (
-                source.mode in {"1", "L"}
-                and "transparency" not in source.info
-            ):
-                result = np.asarray(
-                    source.convert("L")
-                ).copy()
-
-            elif (
-                source.mode in {"RGB", "P"}
-                and "transparency" not in source.info
-            ):
-                result = np.asarray(
-                    source.convert("RGB")
-                ).copy()
-
-            elif source.mode in {
-                "1", "L", "P", "LA", "RGB", "RGBA"
-            }:
-                rgba = np.asarray(source.convert("RGBA"))
-                alpha = rgba[:, :, 3].astype(np.uint16)
-                background = 255 - alpha
-                result = np.empty(
-                    (source.height, source.width, 3),
-                    dtype=np.uint8,
-                )
-
-                for channel in range(3):
-                    foreground = rgba[:, :, channel].astype(np.uint16)
-                    result[:, :, channel] = (
-                        (foreground * alpha + 127) // 255
-                        + background
-                    ).astype(np.uint8)
-
             else:
-                raise WatermarkError(
-                    "Unsupported image mode; "
-                    "convert the input to 8-bit RGB."
-                )
+                if source_pixels > ImageStore.MAX_WORKING_PIXELS:
+                    scale = sqrt(
+                        ImageStore.MAX_WORKING_PIXELS / source_pixels
+                    )
+                    working_size = (
+                        max(1, int(source.width * scale)),
+                        max(1, int(source.height * scale)),
+                    )
+                    if (
+                        source.format == "JPEG"
+                        and source_pixels
+                        > 4 * ImageStore.MAX_WORKING_PIXELS
+                    ):
+                        source.draft("RGB", working_size)
+                    elif source.format == "JPEG":
+                        source.load()
+                    source.thumbnail(
+                        working_size, Image.Resampling.LANCZOS
+                    )
+
+                result = ImageStore._as_array(source)
 
         WatermarkEngine.validate_image(result)
         return result
+
+    @staticmethod
+    def _as_array(source: Image.Image) -> ImageArray:
+        if (
+            source.mode in {"1", "L"}
+            and "transparency" not in source.info
+        ):
+            return np.asarray(source.convert("L")).copy()
+
+        if (
+            source.mode in {"RGB", "P"}
+            and "transparency" not in source.info
+        ):
+            return np.asarray(source.convert("RGB")).copy()
+
+        if source.mode in {"1", "L", "P", "LA", "RGB", "RGBA"}:
+            rgba = np.asarray(source.convert("RGBA"))
+            alpha = rgba[:, :, 3].astype(np.uint16)
+            background = 255 - alpha
+            result = np.empty(
+                (source.height, source.width, 3),
+                dtype=np.uint8,
+            )
+
+            for channel in range(3):
+                foreground = rgba[:, :, channel].astype(np.uint16)
+                result[:, :, channel] = (
+                    (foreground * alpha + 127) // 255
+                    + background
+                ).astype(np.uint8)
+
+            return result
+
+        raise WatermarkError(
+            "Unsupported image mode; "
+            "convert the input to 8-bit RGB."
+        )
 
     @staticmethod
     def save_png(

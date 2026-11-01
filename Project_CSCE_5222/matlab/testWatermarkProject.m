@@ -175,6 +175,16 @@ function testWatermarkProject()
     mustFail(@()ImageStore.savePng( ...
         fullfile(folder, 'invalid.jpg'), result.image));
 
+    largeImagePath = fullfile(folder, 'large-input.jpg');
+    imwrite(zeros(5000, 5000, 'uint8'), largeImagePath);
+    resizedInput = ImageStore.read(largeImagePath);
+    assert(numel(resizedInput) <= ImageStore.MaxWorkingPixels);
+    assert(size(resizedInput, 1) < 5000);
+    assert(size(resizedInput, 2) < 5000);
+    largeInfo = imfinfo(largeImagePath);
+    assert(largeInfo.Width == 5000 && largeInfo.Height == 5000);
+    clear resizedInput;
+
     alphaSource = repmat( ...
         reshape(uint8([100 150 200]), 1, 1, 3), ...
         8, 8);

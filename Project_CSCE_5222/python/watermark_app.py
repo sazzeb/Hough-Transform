@@ -619,6 +619,8 @@ class WatermarkApp:
             return
 
         def operation():
+            with Image.open(path) as source:
+                source_size = source.size
             image = ImageStore.read(
                 path, watermarked=name == "watermarked"
             )
@@ -627,10 +629,10 @@ class WatermarkApp:
                 if name == "watermarked"
                 else None
             )
-            return image, recovered
+            return image, recovered, source_size
 
         def completed(result):
-            array, recovered = result
+            array, recovered, source_size = result
             self.images[name] = array
             self._show(name, array)
 
@@ -652,6 +654,13 @@ class WatermarkApp:
                 f"Loaded {Path(path).name}: "
                 f"{array.shape[1]} × {array.shape[0]}."
             )
+
+            if source_size != (array.shape[1], array.shape[0]):
+                details += (
+                    f" Resized from {source_size[0]} × "
+                    f"{source_size[1]} for safe processing; "
+                    "original file unchanged."
+                )
 
             if name == "cover":
                 details += (

@@ -632,6 +632,7 @@ classdef WatermarkApp < handle
 
         function readAndDisplay(app, name, path)
             imageData = ImageStore.read(path, strcmp(name, 'watermarked'));
+            sourceInfo = imfinfo(path);
             recovered = [];
             if strcmp(name, 'watermarked')
                 recovered = WatermarkEngine.extract(imageData);
@@ -671,9 +672,18 @@ classdef WatermarkApp < handle
                 app.LastSavedPath = '';
                 app.LastQuality = NaN;
                 app.LastRecoveredStrength = NaN;
-                app.setStatus(sprintf( ...
-                    'Loaded %s (%d × %d pixels).', ...
-                    name, size(imageData, 2), size(imageData, 1)));
+                if sourceInfo.Width ~= size(imageData, 2) || ...
+                        sourceInfo.Height ~= size(imageData, 1)
+                    app.setStatus(sprintf( ...
+                        ['Loaded %s. Resized %d × %d to %d × %d ' ...
+                         'for safe processing; original file unchanged.'], ...
+                        name, sourceInfo.Width, sourceInfo.Height, ...
+                        size(imageData, 2), size(imageData, 1)));
+                else
+                    app.setStatus(sprintf( ...
+                        'Loaded %s (%d × %d pixels).', ...
+                        name, size(imageData, 2), size(imageData, 1)));
+                end
                 app.refreshPrepared();
             end
             app.refreshComparison();

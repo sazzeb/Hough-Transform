@@ -587,13 +587,24 @@ class StorageTests(unittest.TestCase):
                 np.zeros((8, 8), np.uint8),
             )
 
-    def test_size_limit_is_checked_before_decoding(self):
+    def test_large_inputs_are_resized_without_changing_the_source(self):
+        path = self.path / "small.png"
+        Image.new("RGB", (8, 8), (20, 40, 60)).save(path)
+
+        with patch.object(ImageStore, "MAX_WORKING_PIXELS", 16):
+            resized = ImageStore.read(path)
+
+        self.assertLessEqual(resized.shape[0] * resized.shape[1], 16)
+        with Image.open(path) as original:
+            self.assertEqual(original.size, (8, 8))
+
+    def test_source_safety_limit_is_checked_before_decoding(self):
         path = self.path / "small.png"
         Image.new("RGB", (4, 4)).save(path)
 
-        with patch.object(ImageStore, "MAX_INPUT_PIXELS", 10):
+        with patch.object(ImageStore, "MAX_SOURCE_PIXELS", 10):
             with self.assertRaisesRegex(
-                WatermarkError, "too large"
+                WatermarkError, "safety limit"
             ):
                 ImageStore.read(path)
 
