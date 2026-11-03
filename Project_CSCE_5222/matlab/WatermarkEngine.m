@@ -44,9 +44,14 @@ classdef WatermarkEngine
                     114 * values(:, :, 3)) / 1000;
             end
 
-            sourceRows = (0:height-1) * (size(values, 1)-1) / (height-1) + 1;
-            sourceColumns = (0:width-1) * ...
-                (size(values, 2)-1) / (width-1) + 1;
+            scale = min(height/size(values, 1), ...
+                width/size(values, 2));
+            fittedHeight = max(1, min(height, ...
+                round(size(values, 1) * scale)));
+            fittedWidth = max(1, min(width, ...
+                round(size(values, 2) * scale)));
+            sourceRows = linspace(1, size(values, 1), fittedHeight);
+            sourceColumns = linspace(1, size(values, 2), fittedWidth);
             row0 = floor(sourceRows);
             column0 = floor(sourceColumns);
             row1 = min(row0 + 1, size(values, 1));
@@ -58,18 +63,35 @@ classdef WatermarkEngine
                 values(row0, column1) .* columnWeight;
             bottom = values(row1, column0) .* (1-columnWeight) + ...
                 values(row1, column1) .* columnWeight;
-            prepared = uint8(floor( ...
+            fitted = uint8(floor( ...
                 top .* (1-rowWeight).' + bottom .* rowWeight.' + 0.5));
+            prepared = repmat(uint8(255), height, width);
+            firstRow = floor((height-fittedHeight)/2) + 1;
+            firstColumn = floor((width-fittedWidth)/2) + 1;
+            prepared(firstRow:firstRow+fittedHeight-1, ...
+                firstColumn:firstColumn+fittedWidth-1) = fitted;
         end
 
-        function capacity = capacityBytes(imageData)
+        function capacity = capacityBytes(imageData, mode)
+            if nargin < 2
+                mode = 'classic';
+            end
             WatermarkEngine.validateImage(imageData);
+
+            if ~any(strcmp(mode, {'classic', 'balanced', 'durable'}))
+                error('Watermark:Option', ...
+                    'Mode must be classic, balanced or durable.');
+            end
 
             slots = 2 * floor(size(imageData, 1)/2) * ...
                 floor(size(imageData, 2)/2);
 
-            capacity = max( ...
-                0, floor(slots / 24) - WatermarkEngine.HEADER_BYTES);
+            repeats = 3;
+            if strcmp(mode, 'durable')
+                repeats = 5;
+            end
+            capacity = max(0, floor( ...
+                (slots-WatermarkEngine.HEADER_SLOTS) / (8*repeats)));
         end
 
         function quality = psnr(original, modified)
@@ -91,13 +113,16 @@ classdef WatermarkEngine
             end
         end
 
-        function result = embed(cover, watermark, strength, targetSize)
+        function result = embed(cover, watermark, strength, targetSize, mode)
             if nargin < 3
                 strength = 16;
             end
 
             if nargin < 4
                 targetSize = [32 32];
+            end
+            if nargin < 5
+                mode = 'classic';
             end
 
             WatermarkEngine.validateImage(cover);
@@ -107,6 +132,17 @@ classdef WatermarkEngine
 
             prepared = WatermarkEngine.prepareWatermark( ...
                 watermark, targetSize);
+
+            if any(strcmp(mode, {'balanced', 'durable'}))
+                result = WatermarkEngine.embedImproved( ...
+                    cover, prepared, strength, mode);
+                return;
+            end
+
+            if ~strcmp(mode, 'classic')
+                error('Watermark:Option', ...
+                    'Mode must be classic, balanced or durable.');
+            end
 
             payload = reshape(prepared.', 1, []);
             capacity = WatermarkEngine.capacityBytes(cover);
@@ -192,17 +228,23 @@ classdef WatermarkEngine
                     'The image is too small for a watermark header.');
             end
 
-            headerBlocks = WatermarkEngine.readBlocks( ...
-                imageData, split/2, 1);
-
-            headerCoefficients = HaarTransform.forward(headerBlocks);
-            headerSlots = reshape( ...
-                headerCoefficients(:, 2:3).', 1, []);
-
-            header = WatermarkEngine.decodeSlots( ...
-                headerSlots, ...
-                WatermarkEngine.HEADER_BYTES, ...
-                WatermarkEngine.HEADER_STRENGTH);
+            channelCount = 1;
+            if ndims(imageData) == 3
+                channelCount = 3;
+            end
+            headerCopies = zeros( ...
+                channelCount, WatermarkEngine.HEADER_BYTES, 'uint8');
+            for channel = 1:channelCount
+                headerBlocks = WatermarkEngine.readBlocks( ...
+                    imageData, split/2, channel);
+                headerCoefficients = HaarTransform.forward(headerBlocks);
+                headerSlots = reshape( ...
+                    headerCoefficients(:, 2:3).', 1, []);
+                headerCopies(channel, :) = WatermarkEngine.decodeSlots( ...
+                    headerSlots, WatermarkEngine.HEADER_BYTES, ...
+                    WatermarkEngine.HEADER_STRENGTH);
+            end
+            header = WatermarkEngine.mergeCopies(headerCopies);
 
             body = header(1:20);
 
@@ -215,13 +257,20 @@ classdef WatermarkEngine
             end
 
             strength = double(body(5));
+            repeats = double(body(6));
+            flags = double(body(8));
             height = WatermarkEngine.unpackUnsigned(body(9:10));
             width = WatermarkEngine.unpackUnsigned(body(11:12));
             payloadLength = WatermarkEngine.unpackUnsigned(body(13:16));
             expectedCrc = WatermarkEngine.unpackUnsigned(body(17:20));
 
-            if ~isequal(body(1:4), uint8('WVM1')) || ...
-                    ~isequal(body(6:8), uint8([3 1 0])) || ...
+            isClassic = isequal(body(1:4), uint8('WVM1')) && ...
+                repeats == 3 && isequal(body(7:8), uint8([1 0]));
+            isImproved = isequal(body(1:4), uint8('WVM2')) && ...
+                body(7) == 1 && ...
+                ((repeats == 3 && flags == 3) || ...
+                (repeats == 5 && flags == 7));
+            if ~(isClassic || isImproved) || ...
                     strength < 8 || strength > 32 || ...
                     height < 8 || height > 64 || ...
                     width < 8 || width > 64 || ...
@@ -231,7 +280,7 @@ classdef WatermarkEngine
                     'The watermark format is invalid or unsupported.');
             end
 
-            lastSlot = split + payloadLength * 24;
+            lastSlot = split + payloadLength * 8 * repeats;
 
             if lastSlot > availableSlots
                 error('Watermark:Incomplete', ...
@@ -239,16 +288,41 @@ classdef WatermarkEngine
                      'image dimensions may have changed.']);
             end
 
-            payloadBlocks = WatermarkEngine.readBlocks( ...
-                imageData, lastSlot/2, 1);
+            payloadCopies = zeros(channelCount, payloadLength, 'uint8');
+            if isImproved
+                indices = WatermarkEngine.blockIndices( ...
+                    imageData, payloadLength * 8 * repeats / 2);
+            end
+            for channel = 1:channelCount
+                if isImproved
+                    payloadBlocks = WatermarkEngine.readSelectedBlocks( ...
+                        imageData, indices, channel);
+                    coefficients = HaarTransform.forward(payloadBlocks);
+                    localStrengths = WatermarkEngine.adaptiveStrengths( ...
+                        coefficients, strength);
+                    slotStrengths = repelem(localStrengths, 2);
+                    slots = reshape(coefficients(:, 2:3).', 1, []);
+                    bits = mod(floor(slots ./ slotStrengths + 0.5), 2);
+                    votes = reshape(bits, payloadLength*8, repeats);
+                    recoveredBits = sum(votes, 2) >= ...
+                        floor(repeats/2) + 1;
+                    payloadCopies(channel, :) = ...
+                        WatermarkEngine.bitsToBytes(recoveredBits);
+                else
+                    payloadBlocks = WatermarkEngine.readBlocks( ...
+                        imageData, lastSlot/2, channel);
+                    coefficients = HaarTransform.forward(payloadBlocks);
+                    slots = reshape(coefficients(:, 2:3).', 1, []);
+                    payloadCopies(channel, :) = ...
+                        WatermarkEngine.decodeSlots( ...
+                            slots(split+1:lastSlot), ...
+                            payloadLength, strength);
+                end
+            end
+            payload = WatermarkEngine.mergeCopies(payloadCopies);
 
-            coefficients = HaarTransform.forward(payloadBlocks);
-            slots = reshape(coefficients(:, 2:3).', 1, []);
-
-            payload = WatermarkEngine.decodeSlots( ...
-                slots(split+1:lastSlot), payloadLength, strength);
-
-            if double(WatermarkEngine.crc32(payload)) ~= expectedCrc
+            verified = double(WatermarkEngine.crc32(payload)) == expectedCrc;
+            if ~verified && ~(isImproved && flags == 7)
                 error('Watermark:Checksum', ...
                     'Watermark checksum failed. The embedded data is damaged.');
             end
@@ -257,11 +331,207 @@ classdef WatermarkEngine
 
             result = struct( ...
                 'watermark', recovered, ...
-                'strength', strength);
+                'strength', strength, ...
+                'verified', verified);
         end
     end
 
     methods (Static, Access = private)
+        function result = embedImproved(cover, prepared, strength, mode)
+            repeats = 3;
+            flags = 3;
+            if strcmp(mode, 'durable')
+                repeats = 5;
+                flags = 7;
+            end
+
+            payload = reshape(prepared.', 1, []);
+            payloadBits = WatermarkEngine.makeBitsWithRepeats( ...
+                payload, repeats);
+            availableBlocks = floor(size(cover, 1)/2) * ...
+                floor(size(cover, 2)/2);
+            headerBlocks = WatermarkEngine.HEADER_SLOTS / 2;
+            payloadBlockCount = numel(payloadBits) / 2;
+
+            if payloadBlockCount > availableBlocks - headerBlocks
+                error('Watermark:Capacity', ...
+                    ['The cover cannot hold this watermark. ' ...
+                     'Choose a smaller watermark size or a larger cover.']);
+            end
+
+            body = [ ...
+                uint8('WVM2'), uint8([strength repeats 1 flags]), ...
+                WatermarkEngine.packUnsigned(size(prepared, 1), 2), ...
+                WatermarkEngine.packUnsigned(size(prepared, 2), 2), ...
+                WatermarkEngine.packUnsigned(numel(payload), 4), ...
+                WatermarkEngine.packUnsigned( ...
+                    WatermarkEngine.crc32(payload), 4)];
+            header = [body, WatermarkEngine.packUnsigned( ...
+                WatermarkEngine.crc32(body), 4)];
+            headerBits = WatermarkEngine.makeBits(header);
+            headerIndices = 0:headerBlocks-1;
+            payloadIndices = WatermarkEngine.blockIndices( ...
+                cover, payloadBlockCount);
+            margin = max(strength, WatermarkEngine.HEADER_STRENGTH) + 8;
+            output = cover;
+            channelCount = 1;
+            if ndims(cover) == 3
+                channelCount = 3;
+            end
+
+            for channel = 1:channelCount
+                headerPixels = WatermarkEngine.readSelectedBlocks( ...
+                    cover, headerIndices, channel);
+                headerPixels = min(255-margin, max(margin, headerPixels));
+                headerCoefficients = HaarTransform.forward(headerPixels);
+                headerSlots = reshape( ...
+                    headerCoefficients(:, 2:3).', 1, []);
+                headerCoefficients(:, 2:3) = reshape( ...
+                    WatermarkEngine.quantize( ...
+                        headerSlots, headerBits, ...
+                        WatermarkEngine.HEADER_STRENGTH), 2, []).';
+                output = WatermarkEngine.writeSelectedBlocks( ...
+                    output, headerIndices, ...
+                    HaarTransform.inverse(headerCoefficients), channel);
+
+                payloadPixels = WatermarkEngine.readSelectedBlocks( ...
+                    cover, payloadIndices, channel);
+                payloadPixels = min(255-margin, max(margin, payloadPixels));
+                payloadCoefficients = HaarTransform.forward(payloadPixels);
+                localStrengths = WatermarkEngine.adaptiveStrengths( ...
+                    payloadCoefficients, strength);
+                payloadCoefficients = ...
+                    WatermarkEngine.stabilizeAdaptiveDetails( ...
+                        payloadCoefficients);
+                slotStrengths = repelem(localStrengths, 2);
+                slots = reshape(payloadCoefficients(:, 2:3).', 1, []);
+                payloadCoefficients(:, 2:3) = reshape( ...
+                    WatermarkEngine.quantize( ...
+                        slots, payloadBits, slotStrengths), 2, []).';
+                output = WatermarkEngine.writeSelectedBlocks( ...
+                    output, payloadIndices, ...
+                    HaarTransform.inverse(payloadCoefficients), channel);
+            end
+
+            checked = WatermarkEngine.extract(output);
+            if ~isequal(checked.watermark, prepared)
+                error('Watermark:SelfCheck', ...
+                    'The embedding self-check failed.');
+            end
+            result = struct( ...
+                'image', output, ...
+                'preparedWatermark', prepared, ...
+                'strength', strength, ...
+                'psnr', WatermarkEngine.psnr(cover, output));
+        end
+
+        function indices = blockIndices(imageData, blockCount)
+            headerBlocks = WatermarkEngine.HEADER_SLOTS / 2;
+            available = floor(size(imageData, 1)/2) * ...
+                floor(size(imageData, 2)/2);
+            remaining = available - headerBlocks;
+            if blockCount > remaining
+                error('Watermark:Capacity', ...
+                    'The cover cannot hold this watermark.');
+            end
+            indices = headerBlocks + floor( ...
+                ((0:blockCount-1) + 0.5) * remaining / blockCount);
+        end
+
+        function blocks = readSelectedBlocks(imageData, indices, channel)
+            if ismatrix(imageData)
+                plane = imageData;
+            else
+                plane = imageData(:, :, channel);
+            end
+            columns = floor(size(plane, 2)/2);
+            rows = 2 * floor(indices / columns) + 1;
+            cols = 2 * mod(indices, columns) + 1;
+            blocks = zeros(numel(indices), 4);
+            offsets = [0 0; 0 1; 1 0; 1 1];
+            for index = 1:4
+                positions = sub2ind(size(plane), ...
+                    rows + offsets(index, 1), ...
+                    cols + offsets(index, 2));
+                blocks(:, index) = double(plane(positions(:)));
+            end
+        end
+
+        function output = writeSelectedBlocks( ...
+                imageData, indices, blocks, channel)
+            output = imageData;
+            if ismatrix(output)
+                plane = output;
+            else
+                plane = output(:, :, channel);
+            end
+            rounded = floor(blocks + 0.5);
+            if any(rounded(:) < 0 | rounded(:) > 255)
+                error('Watermark:Range', ...
+                    'Reconstructed pixels exceed uint8.');
+            end
+            columns = floor(size(plane, 2)/2);
+            rows = 2 * floor(indices / columns) + 1;
+            cols = 2 * mod(indices, columns) + 1;
+            offsets = [0 0; 0 1; 1 0; 1 1];
+            for index = 1:4
+                positions = sub2ind(size(plane), ...
+                    rows + offsets(index, 1), ...
+                    cols + offsets(index, 2));
+                plane(positions) = uint8(rounded(:, index));
+            end
+            if ismatrix(output)
+                output = plane;
+            else
+                output(:, :, channel) = plane;
+            end
+        end
+
+        function strengths = adaptiveStrengths(coefficients, strength)
+            quietStrength = max(8, floor(0.75 * strength + 0.5));
+            strengths = repmat(strength, 1, size(coefficients, 1));
+            strengths(abs(coefficients(:, 4)) < 16) = quietStrength;
+        end
+
+        function coefficients = stabilizeAdaptiveDetails(coefficients)
+            % Keep the texture decision stable after pixel rounding.
+            details = coefficients(:, 4);
+            quiet = abs(details) < 16;
+            details(quiet) = min(12, max(-12, details(quiet)));
+            details(~quiet) = sign(details(~quiet)) .* ...
+                max(20, abs(details(~quiet)));
+            coefficients(:, 4) = details;
+        end
+
+        function bytes = mergeCopies(copies)
+            if size(copies, 1) == 1
+                bytes = copies;
+                return;
+            end
+            bytes = zeros(1, size(copies, 2), 'uint8');
+            for bit = 1:8
+                votes = sum(bitget(copies, 9-bit), 1) >= 2;
+                bytes = bitor(bytes, ...
+                    bitshift(uint8(votes), 8-bit));
+            end
+        end
+
+        function bits = makeBitsWithRepeats(bytes, repeats)
+            bits = zeros(1, numel(bytes)*8);
+            for bit = 1:8
+                bits(bit:8:end) = double(bitget(bytes, 9-bit));
+            end
+            bits = repmat(bits, 1, repeats);
+        end
+
+        function bytes = bitsToBytes(bits)
+            bytes = zeros(1, numel(bits)/8, 'uint8');
+            for bit = 1:8
+                bytes = bitor(bytes, ...
+                    bitshift(uint8(bits(bit:8:end).'), 8-bit));
+            end
+        end
+
         function value = checkInteger(value, minimum, maximum, label)
             if ~isnumeric(value) || ~isreal(value) || ~isscalar(value) || ...
                     ~isfinite(value) || value ~= floor(value) || ...
@@ -371,8 +641,8 @@ classdef WatermarkEngine
         end
 
         function changed = quantize(slots, bits, strength)
-            changed = strength * ...
-                (2 * floor((slots/strength-bits)/2 + 0.5) + bits);
+            changed = strength .* ...
+                (2 * floor((slots./strength-bits)/2 + 0.5) + bits);
         end
 
         function bytes = decodeSlots(slots, byteCount, strength)

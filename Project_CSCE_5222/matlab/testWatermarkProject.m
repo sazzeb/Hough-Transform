@@ -130,11 +130,53 @@ function testWatermarkProject()
 
     projectFolder = fileparts(fileparts(mfilename('fullpath')));
     photograph = ImageStore.read( ...
-        fullfile(projectFolder, 'python', 'sample_cover.jpg'));
+        fullfile(projectFolder, 'matlab', 'source', ...
+            'images', 'sample_cover.jpg'));
     sampleResult = WatermarkEngine.embed(photograph, sample);
     sampleRecovered = WatermarkEngine.extract(sampleResult.image);
     assert(isequal( ...
         sampleRecovered.watermark, sampleResult.preparedWatermark));
+
+    gallery = ExampleGallery();
+    assert(numel(gallery.Entries) >= 10);
+    previousCover = '';
+    for roundNumber = 1:2
+        seenCovers = cell(1, numel(gallery.Entries));
+        for exampleIndex = 1:numel(gallery.Entries)
+            example = gallery.nextExample();
+            assert(~strcmp(example.coverPath, previousCover));
+            assert(~strcmp(example.coverPath, example.watermarkPath));
+            assert(isfile(example.coverPath));
+            assert(isfile(example.watermarkPath));
+            assert(startsWith(example.coverSource, ...
+                'https://unsplash.com/photos/'));
+            seenCovers{exampleIndex} = example.coverPath;
+            previousCover = example.coverPath;
+
+            if roundNumber == 1
+                [exampleCover, exampleWatermark] = ...
+                    gallery.loadExample(example);
+                assert(isequal(size(exampleCover), [768 1152 3]));
+                assert(isequal(size(exampleWatermark), [96 96]));
+                for exampleMode = {'classic', 'balanced', 'durable'}
+                    for exampleStrength = [8 16 32]
+                        embeddedExample = WatermarkEngine.embed( ...
+                            exampleCover, exampleWatermark, ...
+                            exampleStrength, [32 32], exampleMode{1});
+                        recoveredExample = WatermarkEngine.extract( ...
+                            embeddedExample.image);
+                        assert(recoveredExample.verified, ...
+                            'Example recovery failed: %s (%s, %d)', ...
+                            example.title, exampleMode{1}, ...
+                            exampleStrength);
+                        assert(isequal(recoveredExample.watermark, ...
+                            embeddedExample.preparedWatermark));
+                    end
+                end
+            end
+        end
+        assert(numel(unique(seenCovers)) == numel(gallery.Entries));
+    end
 
     repaired = WatermarkEngine.extract( ...
         flipSlots(result.image, [0 576], 16));
@@ -185,6 +227,10 @@ function testWatermarkProject()
     assert(largeInfo.Width == 5000 && largeInfo.Height == 5000);
     clear resizedInput;
 
+    largePngPath = fullfile(folder, 'large-original.png');
+    imwrite(zeros(5000, 5000, 'uint8'), largePngPath);
+    mustFail(@()ImageStore.read(largePngPath, true));
+
     alphaSource = repmat( ...
         reshape(uint8([100 150 200]), 1, 1, 3), ...
         8, 8);
@@ -233,6 +279,58 @@ function testWatermarkProject()
         mod(sum(values .* (1:65536)), 2^32) == 3586566448);
 
     assert(sum(values.^2) == 1422849056);
+
+    wideMark = repmat(uint8(70), 16, 32);
+    fittedMark = WatermarkEngine.prepareWatermark( ...
+        wideMark, [32 32]);
+    assert(all(fittedMark(1:8, :) == 255, 'all'));
+    assert(all(fittedMark(9:24, :) == 70, 'all'));
+
+    improvedCover = repmat(uint8(128), 512, 512, 3);
+    for mode = {'balanced', 'durable'}
+        improved = WatermarkEngine.embed( ...
+            improvedCover, wideMark, 24, [32 32], mode{1});
+        damaged = improved.image;
+        damaged(:, :, 1) = improvedCover(:, :, 1);
+        recovered = WatermarkEngine.extract(damaged);
+        assert(isequal( ...
+            recovered.watermark, improved.preparedWatermark));
+        changedRows = any(improved.image ~= improvedCover, [2 3]);
+        assert(find(changedRows, 1, 'last') > 400);
+        improvedPath = ImageStore.savePng( ...
+            fullfile(folder, [mode{1} '.png']), improved.image);
+        reopened = ImageStore.read(improvedPath, true);
+        reopenedMark = WatermarkEngine.extract(reopened);
+        assert(isequal( ...
+            reopenedMark.watermark, improved.preparedWatermark));
+    end
+
+    fixtureMark = reshape(uint8(0:255), 16, 16).';
+    fixture = WatermarkEngine.embed( ...
+        improvedCover, fixtureMark, 16, [16 16], 'balanced');
+    fixtureValues = double(reshape( ...
+        permute(fixture.image, [3 2 1]), 1, []));
+    assert(sum(fixtureValues) == 100663296);
+    assert(sum(fixtureValues.^2) == 12886360320);
+    assert(mod(sum(fixtureValues .* ...
+        (1:numel(fixtureValues))), 2^32) == 4252447456);
+
+    durableGray = WatermarkEngine.embed( ...
+        repmat(uint8(128), 512, 512), fixtureMark, ...
+        32, [16 16], 'durable');
+    payloadBitsPerCopy = numel(fixtureMark) * 8;
+    payloadBlocks = payloadBitsPerCopy * 5 / 2;
+    remainingBlocks = 512 * 512 / 4 - 288;
+    copySlots = [0 payloadBitsPerCopy 2*payloadBitsPerCopy];
+    selectedBlocks = 288 + floor( ...
+        (floor(copySlots/2) + 0.5) * ...
+        remainingBlocks / payloadBlocks);
+    approximateImage = flipSlots( ...
+        durableGray.image, 2*selectedBlocks, 24);
+    approximate = WatermarkEngine.extract(approximateImage);
+    assert(~approximate.verified);
+    assert(~isequal( ...
+        approximate.watermark, durableGray.preparedWatermark));
 
     fprintf( ...
         ['Passed %d recovery cases and the validation, storage, ' ...

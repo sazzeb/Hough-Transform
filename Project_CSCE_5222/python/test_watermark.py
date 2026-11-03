@@ -1,4 +1,7 @@
 from pathlib import Path
+import gc
+import io
+import random
 import tempfile
 import time
 import tkinter as tk
@@ -9,6 +12,7 @@ import numpy as np
 from PIL import Image
 
 from image_io import ImageStore
+from sample_data import ExampleGallery, load_example_images
 from watermark_app import WatermarkApp
 from watermark_core import (
     HaarTransform,
@@ -40,6 +44,97 @@ class EngineTests(unittest.TestCase):
                 HaarTransform.forward(blocks)
             ),
             blocks,
+        )
+
+    def test_improved_modes_preserve_shape_and_recover_from_channel_damage(self):
+        wide_mark = np.full((16, 32), 70, dtype=np.uint8)
+        fitted = WatermarkEngine.prepare_watermark(wide_mark, (32, 32))
+        self.assertTrue(np.all(fitted[:8] == 255))
+        self.assertTrue(np.all(fitted[8:24] == 70))
+
+        cover = np.full((512, 512, 3), 128, dtype=np.uint8)
+        for mode in ("balanced", "durable"):
+            with self.subTest(mode=mode):
+                result = WatermarkEngine.embed(
+                    cover, wide_mark, 24, (32, 32), mode
+                )
+                damaged = result.image.copy()
+                damaged[:, :, 0] = cover[:, :, 0]
+                recovered = WatermarkEngine.extract(damaged)
+                np.testing.assert_array_equal(
+                    recovered.watermark, result.prepared_watermark
+                )
+                changed_rows = np.flatnonzero(
+                    np.any(result.image != cover, axis=(1, 2))
+                )
+                self.assertGreater(changed_rows.max(), 400)
+
+    def test_balanced_fixture_matches_matlab(self):
+        cover = np.full((512, 512, 3), 128, dtype=np.uint8)
+        mark = np.arange(256, dtype=np.uint8).reshape(16, 16)
+        result = WatermarkEngine.embed(
+            cover, mark, 16, (16, 16), "balanced"
+        )
+        values = result.image.astype(np.float64).ravel()
+        self.assertEqual(int(values.sum()), 100663296)
+        self.assertEqual(int((values * values).sum()), 12886360320)
+        self.assertEqual(
+            int((values * np.arange(1, values.size + 1)).sum() % 2**32),
+            4252447456,
+        )
+
+    def test_durable_mode_reports_lossy_edit_limits(self):
+        cover = self.random.integers(
+            0, 256, (512, 512, 3), dtype=np.uint8
+        )
+        mark = np.arange(256, dtype=np.uint8).reshape(16, 16)
+        embedded = WatermarkEngine.embed(
+            cover, mark, 32, (16, 16), "durable"
+        ).image
+
+        jpeg_bytes = io.BytesIO()
+        Image.fromarray(embedded).save(
+            jpeg_bytes, format="JPEG", quality=95
+        )
+        jpeg_bytes.seek(0)
+        with Image.open(jpeg_bytes) as compressed:
+            jpeg_image = np.asarray(compressed).copy()
+        resized = np.asarray(
+            Image.fromarray(embedded).resize(
+                (500, 500), Image.Resampling.LANCZOS
+            )
+        )
+        with self.assertRaises(WatermarkError):
+            WatermarkEngine.extract(jpeg_image)
+        with self.assertRaises(WatermarkError):
+            WatermarkEngine.extract(resized)
+
+    def test_durable_mode_marks_uncorrectable_payload_as_approximate(self):
+        cover = np.full((512, 512), 128, np.uint8)
+        mark = np.arange(256, dtype=np.uint8).reshape(16, 16)
+        embedded = WatermarkEngine.embed(
+            cover, mark, 32, (16, 16), "durable"
+        ).image
+        altered = embedded.copy()
+        payload_bits_per_copy = mark.size * 8
+        indices = WatermarkEngine._block_indices(
+            embedded, payload_bits_per_copy * 5 // 2
+        )
+        for copy in range(3):
+            block_index = indices[copy * payload_bits_per_copy // 2]
+            block = WatermarkEngine._selected_blocks(
+                altered, np.array([block_index]), 0
+            )
+            coefficients = HaarTransform.forward(block)
+            coefficients[:, 1] += 24
+            WatermarkEngine._write_selected_blocks(
+                altered, np.array([block_index]),
+                HaarTransform.inverse(coefficients), 0,
+            )
+        recovered = WatermarkEngine.extract(altered)
+        self.assertFalse(recovered.verified)
+        self.assertNotEqual(
+            recovered.watermark.tobytes(), mark.tobytes()
         )
 
     def test_prefix_blocks_match_the_full_image(self):
@@ -608,6 +703,16 @@ class StorageTests(unittest.TestCase):
             ):
                 ImageStore.read(path)
 
+    def test_oversized_original_is_not_treated_as_a_saved_watermark(self):
+        path = self.path / "original.png"
+        Image.new("RGB", (4, 4)).save(path)
+
+        with patch.object(ImageStore, "MAX_WATERMARKED_PIXELS", 10):
+            with self.assertRaisesRegex(
+                WatermarkError, "Save watermarked PNG"
+            ):
+                ImageStore.read(path, watermarked=True)
+
     def test_failed_save_preserves_existing_file(self):
         target = self.path / "existing.png"
 
@@ -640,6 +745,52 @@ class StorageTests(unittest.TestCase):
         )
 
 
+class ExampleGalleryTests(unittest.TestCase):
+    def test_every_photo_loads_and_recovers_in_a_shuffled_round(self):
+        gallery = ExampleGallery(rng=random.Random(7))
+        self.assertGreaterEqual(len(gallery.entries), 10)
+        previous = None
+
+        for round_number in range(2):
+            seen = set()
+            for _ in gallery.entries:
+                example = gallery.next_example()
+                cover_path = example["cover_path"]
+                self.assertNotEqual(cover_path, previous)
+                self.assertNotEqual(cover_path, example["watermark_path"])
+                self.assertTrue(cover_path.is_file())
+                self.assertTrue(example["watermark_path"].is_file())
+                self.assertTrue(example["cover_source"].startswith(
+                    "https://unsplash.com/photos/"
+                ))
+                seen.add(cover_path)
+                previous = cover_path
+
+                if round_number == 0:
+                    cover, mark = load_example_images(example)
+                    self.assertEqual(cover.shape, (768, 1152, 3))
+                    self.assertEqual(mark.shape, (96, 96))
+                    for mode in ("classic", "balanced", "durable"):
+                        for strength in (8, 16, 32):
+                            with self.subTest(
+                                photo=example["title"], mode=mode,
+                                strength=strength,
+                            ):
+                                embedded = WatermarkEngine.embed(
+                                    cover, mark, strength, (32, 32), mode
+                                )
+                                extracted = WatermarkEngine.extract(
+                                    embedded.image
+                                )
+                                self.assertTrue(extracted.verified)
+                                np.testing.assert_array_equal(
+                                    extracted.watermark,
+                                    embedded.prepared_watermark,
+                                )
+
+            self.assertEqual(len(seen), len(gallery.entries))
+
+
 class GuiTests(unittest.TestCase):
     def setUp(self):
         try:
@@ -665,6 +816,9 @@ class GuiTests(unittest.TestCase):
 
             self.root.destroy()
             self.folder.cleanup()
+            self.app = None
+            self.root = None
+            gc.collect()
 
     def finish(self):
         deadline = time.monotonic() + 15
@@ -778,6 +932,28 @@ class GuiTests(unittest.TestCase):
 
             error.assert_not_called()
 
+    def test_strength_slider_previews_and_commits_full_image(self):
+        cover = np.full((768, 768, 3), 128, np.uint8)
+        mark = np.full((16, 16), 80, np.uint8)
+        self.app.images["cover"] = cover
+        self.app.images["watermark"] = mark
+        self.app._show("cover", cover)
+        self.app._show("watermark", mark)
+        self.app._strength_drag("75")
+        deadline = time.monotonic() + 5
+        while self.app.preview_job is not None and time.monotonic() < deadline:
+            self.root.update()
+            time.sleep(0.01)
+        self.finish()
+        self.assertTrue(self.app.preview_only)
+        self.assertEqual(self.app.images["watermarked"].shape[:2], (640, 640))
+        self.assertEqual(str(self.app.buttons["save_image"]["state"]), "disabled")
+        self.app._strength_release(None)
+        self.finish()
+        self.assertFalse(self.app.preview_only)
+        self.assertEqual(self.app.images["watermarked"].shape[:2], (768, 768))
+        self.assertEqual(str(self.app.buttons["save_image"]["state"]), "normal")
+
     def test_example_and_failed_reload_keep_the_previous_result(self):
         with patch("watermark_app.messagebox.showerror") as error:
             self.app.try_sample()
@@ -796,6 +972,14 @@ class GuiTests(unittest.TestCase):
                 self.app.images["extracted"], expected
             )
             self.assertIn("passed", self.app.status.get())
+            first_cover = self.app.current_example["cover_path"]
+            self.app.try_sample()
+            self.finish()
+            self.assertNotEqual(
+                self.app.current_example["cover_path"], first_cover
+            )
+            watermarked = self.app.images["watermarked"].copy()
+            expected = self.app.images["extracted"].copy()
 
             invalid = self.path / "plain.png"
             Image.new("L", (256, 256), 128).save(invalid)
@@ -814,6 +998,21 @@ class GuiTests(unittest.TestCase):
                 self.app.images["extracted"], expected
             )
             error.assert_called_once()
+            self.assertIn("Save watermarked PNG", error.call_args.args[1])
+
+    def test_example_button_completes_a_full_shuffled_round(self):
+        self.app.example_gallery = ExampleGallery(rng=random.Random(7))
+        seen = set()
+        with patch("watermark_app.messagebox.showerror") as error:
+            for _ in self.app.example_gallery.entries:
+                self.app.try_sample()
+                self.finish()
+                seen.add(self.app.current_example["cover_path"])
+                self.assertTrue(self.app.recovery_verified)
+                self.assertIn("passed", self.app.status.get())
+
+        self.assertEqual(len(seen), len(self.app.example_gallery.entries))
+        error.assert_not_called()
 
     def test_preview_resizing_keeps_status_visible(self):
         self.root.deiconify()
@@ -861,6 +1060,8 @@ class GuiTests(unittest.TestCase):
             + self.root.winfo_height(),
         )
 
+        self.app.sidebar_canvas.yview_moveto(1.0)
+        self.root.update()
         last_action = self.app.buttons["save_mark"]
         self.assertLessEqual(
             last_action.winfo_rooty() + last_action.winfo_height(),

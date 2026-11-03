@@ -32,8 +32,12 @@ class ImageStore:
 
             if watermarked and source_pixels > ImageStore.MAX_WATERMARKED_PIXELS:
                 raise WatermarkError(
-                    "The watermarked PNG exceeds 24 megapixels. "
-                    "Extraction requires the original pixel dimensions."
+                    f"The selected file is {source.width} × {source.height} "
+                    f"pixels ({source_pixels / 1_000_000:.1f} MP), above "
+                    "the 24 MP recovery limit. If this is your original "
+                    "photo, load it as a cover, embed the watermark, and "
+                    "select the PNG saved with Save watermarked PNG. "
+                    "Resizing this file cannot recover a watermark."
                 )
 
             if source_pixels > ImageStore.MAX_SOURCE_PIXELS:
@@ -67,8 +71,10 @@ class ImageStore:
                     or "transparency" in source.info
                 ):
                     raise WatermarkError(
-                        "Load the unmodified grayscale/RGB PNG "
-                        "saved by this app."
+                        "This file is not an opaque 8-bit grayscale or "
+                        "RGB PNG. Choose the exact file saved with Save "
+                        "watermarked PNG. An original photo or recovered "
+                        "watermark cannot be used for recovery."
                     )
 
                 result = np.asarray(source).copy()

@@ -7,8 +7,11 @@ classdef WatermarkApp < handle
         CapacityLabel
         ValidationLabel
         StrengthField
+        StrengthSlider
+        StrengthPercentLabel
         SizeField
         PresetMenu
+        ModeMenu
         ComparisonMenu
         TechnicalText
         RootPanel
@@ -26,12 +29,18 @@ classdef WatermarkApp < handle
         LastSavedPath = ''
         LastQuality = NaN
         LastRecoveredStrength = NaN
+        LastRecoveryVerified = false
         LastSummary = ''
+        PreviewOnly = false
+        PreviewCover = []
+        PreviewClock = []
         Busy = false
+        Gallery
     end
 
     methods
         function app = WatermarkApp()
+            app.Gallery = ExampleGallery();
             app.Window = uifigure( ...
                 'Name', 'Wavelet Watermark Studio', ...
                 'WindowStyle', 'normal', ...
@@ -58,6 +67,7 @@ classdef WatermarkApp < handle
             app.adjustLayout();
             app.refreshPrepared();
             app.refreshControls();
+            app.PreviewClock = tic;
             app.setStatus('Choose two images, or select Try an example.');
         end
 
@@ -116,10 +126,10 @@ classdef WatermarkApp < handle
         end
 
         function buildCreateTab(app, tab)
-            layout = uigridlayout(tab, [16 1]);
+            layout = uigridlayout(tab, [19 1]);
             layout.Scrollable = 'on';
             layout.RowHeight = {30, 37, 24, 37, 37, 57, 24, ...
-                34, 34, 34, 55, 42, 40, 35, 35, '1x'};
+                34, 34, 36, 22, 34, 34, 55, 42, 40, 35, 35, '1x'};
             layout.RowSpacing = 5;
             layout.Padding = [14 15 14 12];
             layout.BackgroundColor = [1 1 1];
@@ -138,7 +148,7 @@ classdef WatermarkApp < handle
                 @()app.runAction(@()app.loadWithDialog('watermark'), ...
                 'Opening image picker...'), false);
             app.addLabel(layout, 6, ...
-                ['The hidden image is resized to a square and converted ' ...
+                ['The hidden image keeps its proportions and is converted ' ...
                  'to grayscale. Save the result as PNG to recover it.'], false);
 
             app.addLabel(layout, 7, '2  CHOOSE THE SETTINGS', true);
@@ -150,63 +160,81 @@ classdef WatermarkApp < handle
 
             app.StrengthField = app.addTextSetting( ...
                 layout, 9, 'Strength (8–32)', '16');
+            app.StrengthSlider = uislider(layout, ...
+                'Limits', [0 100], 'Value', 33, ...
+                'MajorTicks', [0 25 50 75 100], ...
+                'ValueChangingFcn', @(~, event)app.previewStrength( ...
+                    event.Value), ...
+                'ValueChangedFcn', @(~, event)app.finishStrengthChange( ...
+                    event.Value));
+            app.StrengthSlider.Layout.Row = 10;
+            app.StrengthPercentLabel = app.addLabel(layout, 11, ...
+                'Watermark strength: 33%  •  16/32', false);
             app.SizeField = app.addTextSetting( ...
-                layout, 10, 'Hidden image side (8–64)', '32');
+                layout, 12, 'Hidden image side (8–64)', '32');
+            app.ModeMenu = uidropdown(layout, ...
+                'Items', {'Balanced', 'Durable', 'Classic'}, ...
+                'Value', 'Balanced', ...
+                'ValueChangedFcn', @(~, ~)app.settingsChanged());
+            app.ModeMenu.Layout.Row = 13;
             app.StrengthField.ValueChangedFcn = ...
                 @(~, ~)app.settingsChanged();
             app.SizeField.ValueChangedFcn = ...
                 @(~, ~)app.settingsChanged();
 
-            app.CapacityLabel = app.addLabel(layout, 11, ...
+            app.CapacityLabel = app.addLabel(layout, 14, ...
                 'Capacity: choose an original image.', false);
-            app.ValidationLabel = app.addLabel(layout, 12, ...
+            app.ValidationLabel = app.addLabel(layout, 15, ...
                 'Choose both images to continue.', false);
 
-            app.addButton(layout, 13, 'embed', ...
+            app.addButton(layout, 16, 'embed', ...
                 'Create watermarked image', ...
                 @()app.runAction(@()app.embedImage(), ...
                 'Creating and verifying the image...'), true);
-            app.addButton(layout, 14, 'saveImage', ...
+            app.addButton(layout, 17, 'saveImage', ...
                 'Save watermarked PNG', ...
                 @()app.runAction(@()app.saveWithDialog('watermarked'), ...
                 'Opening save picker...'), false);
-            app.addButton(layout, 15, 'saveMark', ...
+            app.addButton(layout, 18, 'saveMark', ...
                 'Save recovered watermark', ...
                 @()app.runAction(@()app.saveWithDialog('extracted'), ...
                 'Opening save picker...'), false);
-            app.addLabel(layout, 16, ...
-                ['Lower strength changes fewer pixels; higher strength ' ...
-                 'changes more. The result stays in memory until saved.'], false);
+            app.addLabel(layout, 19, ...
+                ['0% is the lightest watermark; 100% is strongest. ' ...
+                 'Drag to preview; release for the full image. Durable ' ...
+                 'helps limited pixel damage. Keep the original PNG: ' ...
+                 'JPEG and resizing still break recovery.'], false);
         end
 
         function buildExtractTab(app, tab)
             layout = uigridlayout(tab, [8 1]);
             layout.Scrollable = 'on';
-            layout.RowHeight = {30, 66, 42, 42, 44, 60, 40, '1x'};
+            layout.RowHeight = {30, 88, 42, 42, 44, 76, 40, '1x'};
             layout.RowSpacing = 8;
             layout.Padding = [14 16 14 12];
             layout.BackgroundColor = [1 1 1];
 
             app.addLabel(layout, 1, 'RECOVER AN EXISTING WATERMARK', true);
             app.addLabel(layout, 2, ...
-                ['Select an unchanged PNG made by this app. ' ...
-                 'The stored strength and watermark size are read ' ...
-                 'from the image automatically.'], false);
-            app.addButton(layout, 3, 'watermarked', ...
-                'Choose watermarked PNG', ...
-                @()app.runAction(@()app.loadWithDialog('watermarked'), ...
-                'Opening image picker...'), true);
-            app.addButton(layout, 4, 'extract', ...
-                'Recover watermark again', ...
+                ['For the image shown, select Recover current image. ' ...
+                 'To recover later, first use Save watermarked PNG ' ...
+                 'in Create, then open that same file below.'], false);
+            app.addButton(layout, 3, 'extract', ...
+                'Recover current image', ...
                 @()app.runAction(@()app.extractImage(), ...
-                'Checking and recovering the watermark...'), false);
+                'Checking and recovering the watermark...'), true);
+            app.addButton(layout, 4, 'watermarked', ...
+                'Open saved watermarked PNG', ...
+                @()app.runAction(@()app.loadWithDialog('watermarked'), ...
+                'Opening image picker...'), false);
             app.addButton(layout, 5, 'extractSave', ...
                 'Save recovered watermark', ...
                 @()app.runAction(@()app.saveWithDialog('extracted'), ...
                 'Opening save picker...'), false);
             app.addLabel(layout, 6, ...
-                ['A modified or JPEG-compressed image may fail ' ...
-                 'verification. Keep the original saved PNG.'], false);
+                ['Select the saved watermarked image, not the original ' ...
+                 'photo, image to hide, or recovered watermark. ' ...
+                 'Do not resize or recompress it.'], false);
             app.addLabel(layout, 7, ...
                 'Recovery checks the embedded header and image data.', false);
         end
@@ -485,8 +513,18 @@ classdef WatermarkApp < handle
 
         function settingsChanged(app)
             app.PresetMenu.Value = 'Custom';
+            strength = str2double(app.StrengthField.Value);
+            if isfinite(strength) && strength >= 8 && strength <= 32
+                percentage = round(100 * (strength-8) / 24);
+                app.StrengthSlider.Value = percentage;
+                app.StrengthPercentLabel.Text = sprintf( ...
+                    'Watermark strength: %d%%  •  %d/32', ...
+                    percentage, round(strength));
+            end
+            app.invalidateResult();
             app.refreshPrepared();
             app.refreshControls();
+            app.embedWhenReady();
         end
 
         function applyPreset(app)
@@ -498,8 +536,124 @@ classdef WatermarkApp < handle
                 case 'Stronger'
                     app.StrengthField.Value = '32';
             end
+            app.StrengthSlider.Value = round(100 * ...
+                (str2double(app.StrengthField.Value)-8) / 24);
+            app.StrengthPercentLabel.Text = sprintf( ...
+                'Watermark strength: %d%%  •  %s/32', ...
+                round(app.StrengthSlider.Value), ...
+                app.StrengthField.Value);
+            app.invalidateResult();
             app.refreshPrepared();
             app.refreshControls();
+            app.embedWhenReady();
+        end
+
+        function mode = selectedMode(app)
+            mode = lower(app.ModeMenu.Value);
+        end
+
+        function invalidateResult(app)
+            app.PreviewOnly = false;
+            app.PreviewCover = [];
+            app.Images.watermarked = [];
+            app.Images.extracted = [];
+            app.Images.comparison = [];
+            app.LastSavedPath = '';
+            app.LastQuality = NaN;
+            app.LastRecoveredStrength = NaN;
+            app.LastRecoveryVerified = false;
+            app.showImage('watermarked', []);
+            app.showImage('extracted', []);
+            app.showImage('comparison', []);
+            app.StatusCards.verification.Text = 'Not checked';
+            app.StatusCards.saved.Text = 'Not saved';
+        end
+
+        function embedWhenReady(app)
+            [valid, ~, side, ~] = app.settings();
+            if valid && ~isempty(app.Images.cover) && ...
+                    ~isempty(app.Images.watermark) && ...
+                    side * side <= WatermarkEngine.capacityBytes( ...
+                        app.Images.cover, app.selectedMode())
+                app.runAction(@()app.embedImage(), ...
+                    'Updating the full watermarked image...');
+            end
+        end
+
+        function previewStrength(app, percentage)
+            if app.Busy
+                return;
+            end
+            percentage = round(percentage);
+            strength = 8 + round(24 * percentage / 100);
+            app.StrengthField.Value = num2str(strength);
+            app.StrengthPercentLabel.Text = sprintf( ...
+                'Watermark strength: %d%%  •  %d/32', ...
+                percentage, strength);
+            app.PresetMenu.Value = 'Custom';
+            if isempty(app.Images.cover) || isempty(app.Images.watermark)
+                return;
+            end
+            if ~app.PreviewOnly
+                app.invalidateResult();
+            end
+            app.PreviewOnly = true;
+            app.refreshControls();
+            if ~isempty(app.PreviewClock) && toc(app.PreviewClock) < 0.25
+                return;
+            end
+            app.PreviewClock = tic;
+            [valid, ~, side, ~] = app.settings();
+            if ~valid
+                return;
+            end
+            cover = app.Images.cover;
+            cropHeight = min(size(cover, 1), 640);
+            cropWidth = min(size(cover, 2), 640);
+            crop = cover(1:cropHeight, 1:cropWidth, :);
+            if side * side > WatermarkEngine.capacityBytes( ...
+                    crop, app.selectedMode())
+                app.setStatus( ...
+                    'This setting needs a larger cover image.');
+                return;
+            end
+            try
+                preview = WatermarkEngine.embed( ...
+                    crop, app.Images.watermark, strength, ...
+                    [side side], app.selectedMode());
+                app.PreviewOnly = true;
+                app.PreviewCover = crop;
+                app.Images.watermarked = preview.image;
+                app.Images.extracted = preview.preparedWatermark;
+                app.LastQuality = preview.psnr;
+                app.LastSavedPath = '';
+                app.showImage('watermarked', preview.image);
+                app.showImage('extracted', preview.preparedWatermark);
+                app.refreshComparison();
+                app.PreviewDetails.watermarked.Text = sprintf( ...
+                    'Live crop preview • %d%%', percentage);
+                app.StatusCards.verification.Text = 'Live preview';
+                app.StatusCards.saved.Text = 'Not saved';
+                app.setStatus(sprintf( ...
+                    'Live %d%% preview • %.2f dB PSNR. Release to create full image.', ...
+                    percentage, preview.psnr));
+                app.refreshControls();
+            catch exception
+                app.setStatus(['Preview unavailable: ' exception.message]);
+            end
+        end
+
+        function finishStrengthChange(app, percentage)
+            app.StrengthSlider.Value = round(percentage);
+            app.StrengthField.Value = num2str( ...
+                8 + round(24 * percentage / 100));
+            app.StrengthPercentLabel.Text = sprintf( ...
+                'Watermark strength: %d%%  •  %s/32', ...
+                round(percentage), app.StrengthField.Value);
+            app.PresetMenu.Value = 'Custom';
+            app.invalidateResult();
+            app.refreshControls();
+            app.embedWhenReady();
         end
 
         function [valid, strength, side, message] = settings(app)
@@ -533,7 +687,8 @@ classdef WatermarkApp < handle
 
             hasCapacity = false;
             if ~isempty(app.Images.cover)
-                capacity = WatermarkEngine.capacityBytes(app.Images.cover);
+                capacity = WatermarkEngine.capacityBytes( ...
+                    app.Images.cover, app.selectedMode());
                 if valid
                     required = side * side;
                     hasCapacity = required <= capacity;
@@ -565,10 +720,14 @@ classdef WatermarkApp < handle
                 'sample', true, 'cover', true, 'watermark', true, ...
                 'watermarked', true, ...
                 'embed', valid && hasCapacity && inputCount == 2, ...
-                'extract', ~isempty(app.Images.watermarked), ...
-                'saveImage', ~isempty(app.Images.watermarked), ...
-                'saveMark', ~isempty(app.Images.extracted), ...
-                'extractSave', ~isempty(app.Images.extracted), ...
+                'extract', ~isempty(app.Images.watermarked) && ...
+                    ~app.PreviewOnly, ...
+                'saveImage', ~isempty(app.Images.watermarked) && ...
+                    ~app.PreviewOnly, ...
+                'saveMark', ~isempty(app.Images.extracted) && ...
+                    ~app.PreviewOnly, ...
+                'extractSave', ~isempty(app.Images.extracted) && ...
+                    ~app.PreviewOnly, ...
                 'copySummary', ~isempty(app.LastSummary), ...
                 'openFolder', ~isempty(app.LastSavedPath));
             names = fieldnames(app.Buttons);
@@ -577,8 +736,10 @@ classdef WatermarkApp < handle
                 app.Buttons.(names{index}).Enable = app.onOff(enabled);
             end
             app.StrengthField.Enable = app.onOff(~app.Busy);
+            app.StrengthSlider.Enable = app.onOff(~app.Busy);
             app.SizeField.Enable = app.onOff(~app.Busy);
             app.PresetMenu.Enable = app.onOff(~app.Busy);
+            app.ModeMenu.Enable = app.onOff(~app.Busy);
             app.refreshTechnicalSummary();
         end
 
@@ -621,8 +782,24 @@ classdef WatermarkApp < handle
         end
 
         function loadWithDialog(app, name)
+            suggestedName = '';
+            suggestedFolder = '';
+            dialogTitle = ['Choose ' name];
+            if strcmp(name, 'watermarked')
+                dialogTitle = 'Open saved watermarked PNG';
+                recentPath = app.LastSavedPath;
+                if ~isfile(recentPath)
+                    recentPath = app.ImagePaths.watermarked;
+                end
+                if isfile(recentPath)
+                    [suggestedFolder, baseName, extension] = ...
+                        fileparts(recentPath);
+                    suggestedName = [baseName extension];
+                end
+            end
             [filename, folder] = app.chooseFile('open', ...
-                ['Choose ' name]);
+                dialogTitle, suggestedName, ...
+                suggestedFolder);
             if isequal(filename, 0)
                 app.setStatus('Image selection canceled.');
                 return;
@@ -633,9 +810,20 @@ classdef WatermarkApp < handle
         function readAndDisplay(app, name, path)
             imageData = ImageStore.read(path, strcmp(name, 'watermarked'));
             sourceInfo = imfinfo(path);
+            app.PreviewOnly = false;
+            app.PreviewCover = [];
             recovered = [];
             if strcmp(name, 'watermarked')
-                recovered = WatermarkEngine.extract(imageData);
+                try
+                    recovered = WatermarkEngine.extract(imageData);
+                catch exception
+                    error('Watermark:InvalidSavedPng', ...
+                        ['This PNG has no recoverable watermark. ' ...
+                         'Select the unchanged file created by ' ...
+                         'Save watermarked PNG, not the original photo ' ...
+                         'or the recovered watermark. Details: %s'], ...
+                        exception.message);
+                end
             end
 
             app.Images.(name) = imageData;
@@ -654,14 +842,25 @@ classdef WatermarkApp < handle
                 app.Images.extracted = recovered.watermark;
                 app.showImage('extracted', recovered.watermark);
                 app.LastRecoveredStrength = recovered.strength;
+                app.LastRecoveryVerified = recovered.verified;
                 app.LastQuality = NaN;
                 app.LastSavedPath = '';
-                app.StatusCards.verification.Text = 'Exact recovery';
+                if recovered.verified
+                    app.StatusCards.verification.Text = 'Exact recovery';
+                else
+                    app.StatusCards.verification.Text = 'Approximate';
+                end
                 app.StatusCards.saved.Text = 'Source PNG loaded';
-                app.setStatus(sprintf( ...
-                    'Recovered a %d × %d watermark from the PNG.', ...
-                    size(recovered.watermark, 2), ...
-                    size(recovered.watermark, 1)));
+                if recovered.verified
+                    app.setStatus(sprintf( ...
+                        'Recovered a %d × %d watermark from the PNG.', ...
+                        size(recovered.watermark, 2), ...
+                        size(recovered.watermark, 1)));
+                else
+                    app.setStatus( ...
+                        ['Approximate recovery: payload checksum failed. ' ...
+                         'Inspect the recovered watermark before using it.']);
+                end
             else
                 app.Images.watermarked = [];
                 app.Images.extracted = [];
@@ -672,6 +871,7 @@ classdef WatermarkApp < handle
                 app.LastSavedPath = '';
                 app.LastQuality = NaN;
                 app.LastRecoveredStrength = NaN;
+                app.LastRecoveryVerified = false;
                 if sourceInfo.Width ~= size(imageData, 2) || ...
                         sourceInfo.Height ~= size(imageData, 1)
                     app.setStatus(sprintf( ...
@@ -701,14 +901,17 @@ classdef WatermarkApp < handle
 
             result = WatermarkEngine.embed( ...
                 app.Images.cover, app.Images.watermark, ...
-                strength, [side side]);
+                strength, [side side], app.selectedMode());
             recovered = WatermarkEngine.extract(result.image);
             app.Images.prepared = result.preparedWatermark;
             app.Images.watermarked = result.image;
             app.Images.extracted = recovered.watermark;
             app.LastQuality = result.psnr;
             app.LastRecoveredStrength = recovered.strength;
+            app.LastRecoveryVerified = recovered.verified;
             app.LastSavedPath = '';
+            app.PreviewOnly = false;
+            app.PreviewCover = [];
             app.showImage('prepared', app.Images.prepared);
             app.showImage('watermarked', app.Images.watermarked);
             app.showImage('extracted', app.Images.extracted);
@@ -727,44 +930,58 @@ classdef WatermarkApp < handle
             recovered = WatermarkEngine.extract(app.Images.watermarked);
             app.Images.extracted = recovered.watermark;
             app.LastRecoveredStrength = recovered.strength;
+            app.LastRecoveryVerified = recovered.verified;
             app.showImage('extracted', recovered.watermark);
-            app.StatusCards.verification.Text = 'Exact recovery';
-            app.setStatus(sprintf( ...
-                'Recovered a %d × %d watermark. Strength: %d.', ...
-                size(recovered.watermark, 2), ...
-                size(recovered.watermark, 1), recovered.strength));
+            if recovered.verified
+                app.StatusCards.verification.Text = 'Exact recovery';
+                app.setStatus(sprintf( ...
+                    'Recovered a %d × %d watermark. Strength: %d.', ...
+                    size(recovered.watermark, 2), ...
+                    size(recovered.watermark, 1), recovered.strength));
+            else
+                app.StatusCards.verification.Text = 'Approximate';
+                app.setStatus( ...
+                    ['Approximate recovery: payload checksum failed. ' ...
+                     'Inspect the recovered watermark before using it.']);
+            end
         end
 
         function runSample(app)
-            projectFolder = fileparts(fileparts(mfilename('fullpath')));
-            coverPath = fullfile( ...
-                projectFolder, 'python', 'sample_cover.jpg');
-            app.Images.cover = ImageStore.read(coverPath);
-            app.Images.watermark = sampleWatermark();
-            app.ImagePaths.cover = coverPath;
-            app.ImagePaths.watermark = 'Built-in example';
+            example = app.Gallery.nextExample();
+            [app.Images.cover, app.Images.watermark] = ...
+                app.Gallery.loadExample(example);
+            app.ImagePaths.cover = example.coverPath;
+            app.ImagePaths.watermark = example.watermarkPath;
             app.StrengthField.Value = '16';
+            app.StrengthSlider.Value = 33;
+            app.StrengthPercentLabel.Text = ...
+                'Watermark strength: 33%  •  16/32';
             app.SizeField.Value = '32';
             app.PresetMenu.Value = 'Recommended';
             app.showImage('cover', app.Images.cover);
             app.showImage('watermark', app.Images.watermark);
             app.embedImage();
-            app.setStatus( ...
-                ['Example ready: compare the images, then save the ' ...
-                 'watermarked PNG if you want to keep it.']);
+            app.setStatus(sprintf( ...
+                ['Example: %s. Exact recovery passed. Compare the ' ...
+                 'images, then save the watermarked PNG if desired.'], ...
+                example.title));
         end
 
         function refreshComparison(app)
             compared = [];
+            original = app.Images.cover;
+            if app.PreviewOnly
+                original = app.PreviewCover;
+            end
             if ~isempty(app.Images.cover) && ...
                     ~isempty(app.Images.watermarked)
                 switch app.ComparisonMenu.Value
                     case 'Original'
-                        compared = app.Images.cover;
+                        compared = original;
                     case 'Watermarked'
                         compared = app.Images.watermarked;
                     otherwise
-                        difference = abs(double(app.Images.cover) - ...
+                        difference = abs(double(original) - ...
                             double(app.Images.watermarked));
                         if ndims(difference) == 3
                             difference = max(difference, [], 3);
@@ -782,6 +999,10 @@ classdef WatermarkApp < handle
         end
 
         function saveWithDialog(app, name)
+            if app.PreviewOnly
+                error('Watermark:Preview', ...
+                    'Release the strength slider to create the full image.');
+            end
             defaultName = [name '.png'];
             [filename, folder] = app.chooseFile( ...
                 'save', ['Save ' name], defaultName);
@@ -797,16 +1018,28 @@ classdef WatermarkApp < handle
                 fullfile(folder, filename), app.Images.(name));
             app.LastSavedPath = saved;
             if strcmp(name, 'watermarked')
+                app.ImagePaths.watermarked = saved;
                 reopened = ImageStore.read(saved, true);
                 recovered = WatermarkEngine.extract(reopened);
                 app.Images.extracted = recovered.watermark;
+                app.LastRecoveryVerified = recovered.verified;
                 app.showImage('extracted', recovered.watermark);
-                app.StatusCards.verification.Text = 'Exact recovery';
+                if recovered.verified
+                    app.StatusCards.verification.Text = 'Exact recovery';
+                else
+                    app.StatusCards.verification.Text = 'Approximate';
+                end
                 app.StatusCards.saved.Text = 'PNG verified';
             else
                 app.StatusCards.saved.Text = 'Watermark PNG saved';
             end
-            app.setStatus(['Saved and verified: ' saved]);
+            if ~app.LastRecoveryVerified
+                app.setStatus([ ...
+                    'PNG saved; watermark recovery remains approximate: ' ...
+                    saved]);
+            else
+                app.setStatus(['Saved and verified: ' saved]);
+            end
         end
 
         function refreshTechnicalSummary(app)
@@ -817,7 +1050,8 @@ classdef WatermarkApp < handle
                 lines{end+1} = sprintf('Original: %d × %d px', ...
                     size(cover, 2), size(cover, 1));
                 lines{end+1} = sprintf('Capacity: %d bytes', ...
-                    WatermarkEngine.capacityBytes(cover));
+                    WatermarkEngine.capacityBytes( ...
+                        cover, app.selectedMode()));
                 lines{end+1} = ['Original path: ' app.ImagePaths.cover];
             end
             if ~isempty(app.Images.watermark)
@@ -830,9 +1064,19 @@ classdef WatermarkApp < handle
                 lines{end+1} = sprintf( ...
                     'Prepared watermark: %d × %d grayscale', side, side);
                 lines{end+1} = sprintf('Strength: %d', strength);
+                lines{end+1} = sprintf( ...
+                    'Strength slider: %d%%', ...
+                    round(app.StrengthSlider.Value));
+                lines{end+1} = ['Mode: ' app.ModeMenu.Value];
             end
             if ~isempty(app.Images.extracted)
-                lines{end+1} = 'Recovery: exact, checksums passed';
+                if app.PreviewOnly
+                    lines{end+1} = 'Recovery: live crop preview';
+                elseif ~app.LastRecoveryVerified
+                    lines{end+1} = 'Recovery: approximate; checksum failed';
+                else
+                    lines{end+1} = 'Recovery: exact, checksums passed';
+                end
                 if isfinite(app.LastRecoveredStrength)
                     lines{end+1} = sprintf( ...
                         'Stored strength: %d', app.LastRecoveredStrength);
@@ -870,10 +1114,14 @@ classdef WatermarkApp < handle
             desktop.open(javaObject('java.io.File', folder));
         end
 
-        function [filename, folder] = chooseFile(~, mode, title, defaultName)
+        function [filename, folder] = chooseFile( ...
+                ~, mode, title, defaultName, defaultFolder)
             % A movable native dialog stays above the visible app.
             if nargin < 4
                 defaultName = '';
+            end
+            if nargin < 5
+                defaultFolder = '';
             end
             if ~usejava('awt')
                 error('Watermark:Dialog', ...
@@ -889,6 +1137,9 @@ classdef WatermarkApp < handle
                 'java.awt.FileDialog', owner, title, int32(dialogMode));
             pickerCleanup = onCleanup(@()picker.dispose());
             picker.setAlwaysOnTop(true);
+            if ~isempty(defaultFolder)
+                picker.setDirectory(defaultFolder);
+            end
             if ~isempty(defaultName)
                 picker.setFile(defaultName);
             end

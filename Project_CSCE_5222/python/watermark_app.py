@@ -5,10 +5,11 @@ import sys
 from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
+import numpy as np
 
 from image_io import ImageStore
-from sample_data import load_sample_images
-from watermark_core import WatermarkEngine
+from sample_data import ExampleGallery, load_example_images
+from watermark_core import WatermarkEngine, WatermarkError
 
 
 PALETTE = {
@@ -173,6 +174,10 @@ class ImagePreview(tk.Frame):
         if self.resize_job is not None:
             self.after_cancel(self.resize_job)
 
+        self.canvas.delete("all")
+        self.photo = None
+        self.source = None
+
         super().destroy()
 
 
@@ -191,17 +196,29 @@ class WatermarkApp:
                 "watermark",
                 "watermarked",
                 "extracted",
+                "prepared",
+                "difference",
             )
         )
 
         self.previews = {}
         self.buttons = {}
+        self.example_gallery = ExampleGallery()
+        self.current_example = None
+        self.recent_watermarked_path = None
 
         self.busy = False
         self.executor = ThreadPoolExecutor(max_workers=1)
 
         self.strength = tk.StringVar(value="16")
         self.side = tk.StringVar(value="32")
+        self.mode = tk.StringVar(value="Balanced")
+        self.strength_percent = tk.StringVar(value="Strength: 33%  •  16/32")
+        self.preview_only = False
+        self.recovery_verified = False
+        self.preview_job = None
+        self.pending_full_refresh = False
+        self._syncing_strength = False
 
         self.status = tk.StringVar(
             value=(
@@ -211,6 +228,7 @@ class WatermarkApp:
         )
 
         self._build_interface()
+        self.strength.trace_add("write", self._strength_text_changed)
         self._update_controls()
 
         self.root.protocol(
@@ -257,8 +275,32 @@ class WatermarkApp:
         sidebar.grid(row=0, column=0, sticky="ns", padx=(0, 12))
         sidebar.grid_propagate(False)
 
-        controls = tk.Frame(sidebar, bg=PALETTE["surface"])
-        controls.pack(fill="both", expand=True, padx=14, pady=12)
+        self.sidebar_canvas = tk.Canvas(
+            sidebar, bg=PALETTE["surface"],
+            highlightthickness=0, borderwidth=0,
+        )
+        sidebar_scroll = ttk.Scrollbar(
+            sidebar, orient="vertical", command=self.sidebar_canvas.yview
+        )
+        self.sidebar_canvas.configure(yscrollcommand=sidebar_scroll.set)
+        sidebar_scroll.pack(side="right", fill="y")
+        self.sidebar_canvas.pack(side="left", fill="both", expand=True)
+        controls = tk.Frame(self.sidebar_canvas, bg=PALETTE["surface"])
+        self.sidebar_window = self.sidebar_canvas.create_window(
+            (13, 12), window=controls, anchor="nw"
+        )
+        self.sidebar_canvas.bind(
+            "<Configure>",
+            lambda event: self.sidebar_canvas.itemconfigure(
+                self.sidebar_window, width=max(180, event.width - 26)
+            ),
+        )
+        controls.bind(
+            "<Configure>",
+            lambda _event: self.sidebar_canvas.configure(
+                scrollregion=self.sidebar_canvas.bbox("all")
+            ),
+        )
 
         self._section(controls, "QUICK START")
         self._button(
@@ -276,17 +318,61 @@ class WatermarkApp:
             lambda: self.load("watermark"),
         )
         self._button(
-            controls, "watermarked", "Choose watermarked PNG",
+            controls, "watermarked", "Open saved watermarked PNG",
             lambda: self.load("watermarked"),
         )
+        tk.Label(
+            controls,
+            text=(
+                "For the current result, use Recover watermark below. "
+                "Here, select only the PNG made by Save watermarked PNG."
+            ),
+            bg=PALETTE["surface"], fg=PALETTE["muted"],
+            wraplength=250, justify="left", anchor="w",
+        ).pack(fill="x", pady=(2, 7))
 
         self._section(controls, "02  EMBEDDING SETTINGS")
         self.strength_box = self._setting(
             controls, "Strength  ·  8–32", self.strength, 8, 32
         )
+        self.strength_scale = tk.Scale(
+            controls, from_=0, to=100, orient="horizontal",
+            showvalue=False, resolution=1,
+            command=self._strength_drag,
+            bg=PALETTE["surface"], fg=PALETTE["text"],
+            troughcolor=PALETTE["accent"],
+            highlightthickness=0,
+        )
+        self.strength_scale.pack(fill="x")
+        self.strength_scale.set(33)
+        self.strength_scale.bind("<ButtonRelease-1>", self._strength_release)
+        tk.Label(
+            controls, textvariable=self.strength_percent,
+            bg=PALETTE["surface"], fg=PALETTE["text"],
+            anchor="w",
+        ).pack(fill="x")
         self.side_box = self._setting(
             controls, "Watermark side  ·  8–64", self.side, 8, 64
         )
+        self.mode_box = ttk.Combobox(
+            controls, textvariable=self.mode,
+            values=("Balanced", "Durable", "Classic"),
+            state="readonly",
+        )
+        self.mode_box.pack(fill="x", pady=(4, 2))
+        self.mode_box.bind("<<ComboboxSelected>>", self._mode_changed)
+        self.strength_box.bind("<FocusOut>", self._strength_release)
+        self.strength_box.bind("<Return>", self._strength_release)
+        self.side_box.bind("<FocusOut>", self._strength_release)
+        self.side_box.bind("<Return>", self._strength_release)
+        tk.Label(
+            controls,
+            text=("0% is minimum strength; 100% is maximum. "
+                  "Durable adds redundancy for limited pixel damage. "
+                  "Keep the original PNG; JPEG and resizing still break recovery."),
+            bg=PALETTE["surface"], fg=PALETTE["text"],
+            wraplength=218, justify="left", anchor="w",
+        ).pack(fill="x", pady=(3, 1))
 
         self._section(controls, "03  PROCESS")
         self._button(
@@ -313,20 +399,22 @@ class WatermarkApp:
         captions = (
             ("cover", "Original image", "Choose an original image"),
             ("watermark", "Image to hide", "Choose an image to hide"),
+            ("prepared", "Prepared watermark", "See the fitted watermark"),
             ("watermarked", "Watermarked image", "Embed to see the result"),
             ("extracted", "Recovered watermark", "Recover a watermark"),
+            ("difference", "Change map ×4", "See amplified changes"),
         )
 
         for index, (name, caption, placeholder) in enumerate(captions):
             panel = ImagePreview(
                 previews,
                 caption,
-                pixelated=name in {"watermark", "extracted"},
+                pixelated=name in {"watermark", "prepared", "extracted"},
                 placeholder=placeholder,
             )
             panel.grid(
-                row=index // 2,
-                column=index % 2,
+                row=index // 3,
+                column=index % 3,
                 padx=5,
                 pady=5,
                 sticky="nsew",
@@ -335,6 +423,7 @@ class WatermarkApp:
 
         for index in range(2):
             previews.grid_rowconfigure(index, weight=1)
+        for index in range(3):
             previews.grid_columnconfigure(index, weight=1)
 
         footer = tk.Frame(self.root, bg=PALETTE["surface"])
@@ -468,12 +557,15 @@ class WatermarkApp:
             ),
             "extract": (
                 self.images["watermarked"] is not None
+                and not self.preview_only
             ),
             "save_image": (
                 self.images["watermarked"] is not None
+                and not self.preview_only
             ),
             "save_mark": (
                 self.images["extracted"] is not None
+                and not self.preview_only
             ),
         }
 
@@ -489,6 +581,7 @@ class WatermarkApp:
         for control in (
             self.strength_box,
             self.side_box,
+            self.strength_scale,
         ):
             control.configure(
                 state=(
@@ -497,28 +590,161 @@ class WatermarkApp:
                     else "normal"
                 )
             )
+        self.mode_box.configure(
+            state="disabled" if self.busy else "readonly"
+        )
 
     def _show(self, name, array):
         self.previews[name].set_image(array)
 
     @staticmethod
-    def _embed_and_extract(cover, watermark, strength, side):
+    def _embed_and_extract(cover, watermark, strength, side, mode="balanced"):
         embedded = WatermarkEngine.embed(
-            cover, watermark, strength, (side, side)
+            cover, watermark, strength, (side, side), mode=mode
         )
         extracted = WatermarkEngine.extract(embedded.image)
         return embedded, extracted
 
+    @staticmethod
+    def _difference(original, changed):
+        difference = np.abs(
+            original.astype(np.int16) - changed.astype(np.int16)
+        )
+        if difference.ndim == 3:
+            difference = difference.max(axis=2)
+        return np.minimum(255, 4 * difference).astype(np.uint8)
+
+    def _selected_mode(self):
+        return self.mode.get().lower()
+
+    def _strength_text_changed(self, *_args):
+        if self._syncing_strength:
+            return
+        try:
+            strength = int(self.strength.get())
+        except ValueError:
+            return
+        if not 8 <= strength <= 32:
+            return
+        percentage = round(100 * (strength - 8) / 24)
+        self._syncing_strength = True
+        try:
+            self.strength_scale.set(percentage)
+            self.strength_percent.set(
+                f"Strength: {percentage}%  •  {strength}/32"
+            )
+        finally:
+            self._syncing_strength = False
+
+    def _strength_drag(self, value):
+        if self._syncing_strength:
+            return
+        percentage = int(round(float(value)))
+        strength = 8 + round(24 * percentage / 100)
+        self._syncing_strength = True
+        try:
+            self.strength.set(str(strength))
+        finally:
+            self._syncing_strength = False
+        self.strength_percent.set(
+            f"Strength: {percentage}%  •  {strength}/32"
+        )
+        if self.busy or self.images["cover"] is None or self.images["watermark"] is None:
+            return
+        self.preview_only = True
+        self._update_controls()
+        if self.preview_job is not None:
+            self.root.after_cancel(self.preview_job)
+        self.preview_job = self.root.after(150, self._show_strength_preview)
+
+    def _show_strength_preview(self):
+        self.preview_job = None
+        if self.busy:
+            self.preview_job = self.root.after(150, self._show_strength_preview)
+            return
+        try:
+            side = int(self.side.get())
+            strength = int(self.strength.get())
+            cover = self.images["cover"]
+            crop = cover[:min(640, cover.shape[0]), :min(640, cover.shape[1])].copy()
+            if side * side > WatermarkEngine.capacity_bytes(
+                crop, self._selected_mode()
+            ):
+                self.status.set("This setting needs a larger cover image.")
+                return
+        except (ValueError, TypeError) as error:
+            self.status.set(f"Preview unavailable: {error}")
+            return
+
+        def completed(result):
+            embedded, extracted = result
+            self.preview_only = True
+            self.recovery_verified = extracted.verified
+            self.images["watermarked"] = embedded.image
+            self.images["extracted"] = extracted.watermark
+            self.images["prepared"] = embedded.prepared_watermark
+            self.images["difference"] = self._difference(crop, embedded.image)
+            for name in ("watermarked", "extracted", "prepared", "difference"):
+                self._show(name, self.images[name])
+            self.status.set(
+                f"Live {self.strength_scale.get()}% crop preview · "
+                f"{embedded.psnr:.2f} dB PSNR. Release to create the full image."
+            )
+
+        watermark = self.images["watermark"]
+        mode = self._selected_mode()
+        self._start(
+            lambda: WatermarkApp._embed_and_extract(
+                crop, watermark, strength, side, mode,
+            ), completed, "Updating the live preview…",
+        )
+
+    def _strength_release(self, _event):
+        if self.preview_job is not None:
+            self.root.after_cancel(self.preview_job)
+            self.preview_job = None
+        if self.images["watermark"] is not None:
+            try:
+                side = int(self.side.get())
+                self.images["prepared"] = WatermarkEngine.prepare_watermark(
+                    self.images["watermark"], (side, side)
+                )
+                self._show("prepared", self.images["prepared"])
+            except ValueError:
+                pass
+        if self.images["cover"] is None or self.images["watermark"] is None:
+            return
+        self.pending_full_refresh = True
+        if not self.busy:
+            self._refresh_full_from_slider()
+
+    def _refresh_full_from_slider(self):
+        self.pending_full_refresh = False
+        self.embed()
+
+    def _mode_changed(self, _event):
+        if self.images["cover"] is not None and self.images["watermark"] is not None:
+            self._strength_release(None)
+
     def _display_embedding(self, embedded, extracted):
+        self.preview_only = False
+        self.recovery_verified = extracted.verified
         self.images["watermarked"] = embedded.image
         self.images["extracted"] = extracted.watermark
+        self.images["prepared"] = embedded.prepared_watermark
+        self.images["difference"] = self._difference(
+            self.images["cover"], embedded.image
+        )
         self._show("watermarked", embedded.image)
         self._show("extracted", extracted.watermark)
+        self._show("prepared", embedded.prepared_watermark)
+        self._show("difference", self.images["difference"])
         self.status.set(
             f"Embedded and extracted a "
             f"{extracted.watermark.shape[1]} × "
             f"{extracted.watermark.shape[0]} grayscale watermark. "
-            f"across all image channels. Strength: {embedded.strength}; "
+            f"Mode: {self.mode.get()}; "
+            f"strength: {embedded.strength} ({self.strength_scale.get()}%); "
             f"PSNR: {embedded.psnr:.2f} dB. "
             "Exact recovery passed. Save the watermarked PNG "
             "to keep it; JPEG output is not supported because it is lossy."
@@ -528,22 +754,28 @@ class WatermarkApp:
         if self.busy:
             return
 
+        mode = self._selected_mode()
+        example = self.example_gallery.next_example()
+
         def operation():
-            cover, watermark = load_sample_images()
-            embedded, extracted = self._embed_and_extract(
-                cover, watermark, 16, 32
+            cover, watermark = load_example_images(example)
+            embedded, extracted = WatermarkApp._embed_and_extract(
+                cover, watermark, 16, 32, mode
             )
             return cover, watermark, embedded, extracted
 
         def completed(result):
             cover, watermark, embedded, extracted = result
             self.strength.set("16")
+            self.strength_scale.set(33)
             self.side.set("32")
             self.images["cover"] = cover
             self.images["watermark"] = watermark
             self._show("cover", cover)
             self._show("watermark", watermark)
             self._display_embedding(embedded, extracted)
+            self.current_example = example
+            self.status.set(f"Example: {example['title']}. {self.status.get()}")
 
         self._start(
             operation, completed, "Loading and testing the example…"
@@ -590,6 +822,8 @@ class WatermarkApp:
                 self.busy = False
                 self.progress.stop()
                 self._update_controls()
+                if self.pending_full_refresh:
+                    self.root.after(0, self._refresh_full_from_slider)
 
         self.root.after(40, poll)
 
@@ -609,10 +843,20 @@ class WatermarkApp:
             ]
         )
 
+        picker_options = dict(
+            title=("Open saved watermarked PNG" if name == "watermarked"
+                   else f"Load {name}"),
+            filetypes=types,
+        )
+        if name == "watermarked" and self.recent_watermarked_path:
+            recent = Path(self.recent_watermarked_path)
+            if recent.is_file():
+                picker_options["initialdir"] = str(recent.parent)
+                picker_options["initialfile"] = recent.name
+
         path = self._choose_file(
             filedialog.askopenfilename,
-            title=f"Load {name}",
-            filetypes=types,
+            **picker_options,
         )
 
         if not path:
@@ -624,22 +868,30 @@ class WatermarkApp:
             image = ImageStore.read(
                 path, watermarked=name == "watermarked"
             )
-            recovered = (
-                WatermarkEngine.extract(image)
-                if name == "watermarked"
-                else None
-            )
+            recovered = None
+            if name == "watermarked":
+                try:
+                    recovered = WatermarkEngine.extract(image)
+                except WatermarkError as error:
+                    raise WatermarkError(
+                        "This PNG has no recoverable watermark. Select "
+                        "the unchanged file created by Save watermarked "
+                        "PNG, not the original photo or recovered "
+                        f"watermark. Details: {error}"
+                    ) from error
             return image, recovered, source_size
 
         def completed(result):
             array, recovered, source_size = result
+            self.preview_only = False
+            self.recovery_verified = recovered.verified if recovered is not None else False
             self.images[name] = array
             self._show(name, array)
 
             invalidated = (
-                ("watermarked", "extracted")
+                ("watermarked", "extracted", "prepared", "difference")
                 if name != "watermarked"
-                else ("extracted",)
+                else ("extracted", "prepared", "difference")
             )
 
             for output in invalidated:
@@ -647,8 +899,18 @@ class WatermarkApp:
                 self._show(output, None)
 
             if recovered is not None:
+                self.recent_watermarked_path = path
                 self.images["extracted"] = recovered.watermark
                 self._show("extracted", recovered.watermark)
+            elif self.images["watermark"] is not None:
+                try:
+                    side = int(self.side.get())
+                    self.images["prepared"] = WatermarkEngine.prepare_watermark(
+                        self.images["watermark"], (side, side)
+                    )
+                    self._show("prepared", self.images["prepared"])
+                except ValueError:
+                    pass
 
             details = (
                 f"Loaded {Path(path).name}: "
@@ -665,12 +927,17 @@ class WatermarkApp:
             if name == "cover":
                 details += (
                     " Payload capacity: "
-                    f"{WatermarkEngine.capacity_bytes(array)} bytes."
+                    f"{WatermarkEngine.capacity_bytes(array, self._selected_mode())} bytes."
                 )
 
             if recovered is not None:
+                recovery_message = (
+                    "Watermark extracted and checked"
+                    if recovered.verified else
+                    "Approximate watermark recovered; checksum failed"
+                )
                 details += (
-                    " Watermark extracted and checked: "
+                    f" {recovery_message}: "
                     f"{recovered.watermark.shape[1]} × "
                     f"{recovered.watermark.shape[0]}, "
                     f"strength {recovered.strength}."
@@ -695,6 +962,7 @@ class WatermarkApp:
         try:
             strength = int(self.strength.get())
             side = int(self.side.get())
+            mode = self._selected_mode()
 
         except ValueError as error:
             messagebox.showerror(
@@ -708,12 +976,15 @@ class WatermarkApp:
         def completed(result):
             self._display_embedding(*result)
 
+        cover = self.images["cover"]
+        watermark = self.images["watermark"]
         self._start(
-            lambda: self._embed_and_extract(
-                self.images["cover"],
-                self.images["watermark"],
+            lambda: WatermarkApp._embed_and_extract(
+                cover,
+                watermark,
                 strength,
                 side,
+                mode,
             ),
             completed,
             "Embedding and checking recovery…",
@@ -723,28 +994,34 @@ class WatermarkApp:
         if (
             self.busy
             or self.images["watermarked"] is None
+            or self.preview_only
         ):
             return
 
         def completed(result):
             self.images["extracted"] = result.watermark
+            self.recovery_verified = result.verified
 
             self._show(
                 "extracted",
                 result.watermark,
             )
 
+            recovery_message = (
+                "Extraction passed both checksums."
+                if result.verified else
+                "Approximate recovery: payload checksum failed."
+            )
             self.status.set(
-                "Extraction passed both checksums. "
+                f"{recovery_message} "
                 f"Stored strength: {result.strength}. "
                 f"Watermark: {result.watermark.shape[1]} "
                 f"× {result.watermark.shape[0]}."
             )
 
+        watermarked = self.images["watermarked"]
         self._start(
-            lambda: WatermarkEngine.extract(
-                self.images["watermarked"]
-            ),
+            lambda: WatermarkEngine.extract(watermarked),
             completed,
             "Extracting and verifying watermark…",
         )
@@ -753,6 +1030,7 @@ class WatermarkApp:
         if (
             self.busy
             or self.images[name] is None
+            or self.preview_only
         ):
             return
 
@@ -765,8 +1043,9 @@ class WatermarkApp:
         )
 
         if path:
+            image = self.images[name]
             def operation():
-                saved = ImageStore.save_png(path, self.images[name])
+                saved = ImageStore.save_png(path, image)
                 recovered = None
 
                 if name == "watermarked":
@@ -781,14 +1060,27 @@ class WatermarkApp:
                 saved, recovered = result
 
                 if recovered is not None:
+                    self.recent_watermarked_path = saved
                     self.images["extracted"] = recovered.watermark
                     self._show("extracted", recovered.watermark)
-                    self.status.set(
-                        f"Saved {saved}. Reopened the PNG and "
-                        "recovered its watermark."
-                    )
+                    if recovered.verified:
+                        self.status.set(
+                            f"Saved {saved}. Reopened the PNG and "
+                            "recovered its watermark exactly."
+                        )
+                    else:
+                        self.status.set(
+                            f"Saved {saved}. Recovery remains approximate; "
+                            "the payload checksum failed."
+                        )
                 else:
-                    self.status.set(f"Verified and saved: {saved}")
+                    if self.recovery_verified:
+                        self.status.set(f"Verified and saved: {saved}")
+                    else:
+                        self.status.set(
+                            f"Saved approximate watermark: {saved}. "
+                            "The payload checksum failed."
+                        )
 
             self._start(
                 operation,
@@ -817,6 +1109,10 @@ class WatermarkApp:
             )
 
             return
+
+        if self.preview_job is not None:
+            self.root.after_cancel(self.preview_job)
+            self.preview_job = None
 
         self.executor.shutdown(
             wait=False,
