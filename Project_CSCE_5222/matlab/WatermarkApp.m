@@ -14,9 +14,16 @@ classdef WatermarkApp < handle
         ModeMenu
         ComparisonMenu
         TechnicalText
+        EvaluationSummary
+        EvaluationDetails
+        EvaluationNote
         RootPanel
         WorkspaceLayout
+        RightLayout
         PreviewGrid
+        StageAxes = struct()
+        StageDetails = struct()
+        MetricValues = struct()
         PreviewCards = struct()
         StatusCards = struct()
         Buttons = struct()
@@ -30,6 +37,7 @@ classdef WatermarkApp < handle
         LastQuality = NaN
         LastRecoveredStrength = NaN
         LastRecoveryVerified = false
+        LastRecoveryState = 'Not checked'
         LastSummary = ''
         PreviewOnly = false
         PreviewCover = []
@@ -44,7 +52,7 @@ classdef WatermarkApp < handle
             app.Window = uifigure( ...
                 'Name', 'Wavelet Watermark Studio', ...
                 'WindowStyle', 'normal', ...
-                'Position', [80 80 1180 760], ...
+                'Position', [80 80 1360 860], ...
                 'Color', [1 1 1], ...
                 'CloseRequestFcn', @(~, ~)app.closeWindow(), ...
                 'WindowKeyPressFcn', @(~, event)app.handleShortcut(event));
@@ -118,10 +126,12 @@ classdef WatermarkApp < handle
             createTab = uitab(tabs, 'Title', 'Create');
             extractTab = uitab(tabs, 'Title', 'Extract');
             detailsTab = uitab(tabs, 'Title', 'Details');
+            evaluationTab = uitab(tabs, 'Title', 'Evaluate');
 
             app.buildCreateTab(createTab);
             app.buildExtractTab(extractTab);
             app.buildDetailsTab(detailsTab);
+            app.buildEvaluationTab(evaluationTab);
             app.buildPreviewArea(workspace);
         end
 
@@ -200,10 +210,11 @@ classdef WatermarkApp < handle
                 @()app.runAction(@()app.saveWithDialog('extracted'), ...
                 'Opening save picker...'), false);
             app.addLabel(layout, 19, ...
-                ['0% is the lightest watermark; 100% is strongest. ' ...
-                 'Drag to preview; release for the full image. Durable ' ...
-                 'helps limited pixel damage. Keep the original PNG: ' ...
-                 'JPEG and resizing still break recovery.'], false);
+                ['0–100% controls strength 8–32; it is not the ' ...
+                 'percentage of pixels changed. Drag to preview; ' ...
+                 'release for the full image. Durable adds redundancy ' ...
+                 'against limited pixel damage. Keep the original PNG: ' ...
+                 'JPEG, cropping and resizing may prevent recovery.'], false);
         end
 
         function buildExtractTab(app, tab)
@@ -269,12 +280,53 @@ classdef WatermarkApp < handle
                 'PSNR measures image change; higher is closer.', false);
         end
 
+        function buildEvaluationTab(app, tab)
+            layout = uigridlayout(tab, [6 1]);
+            layout.Scrollable = 'on';
+            layout.RowHeight = {30, 145, 40, 170, 260, 110};
+            layout.RowSpacing = 8;
+            layout.Padding = [14 16 14 12];
+            layout.BackgroundColor = [1 1 1];
+            app.addLabel(layout, 1, 'ROBUSTNESS STUDY', true);
+            app.addLabel(layout, 2, ...
+                ['Uses the selected image pair, fitted to at most ' ...
+                 '512 px. Tests Classic, Balanced and Durable; ' ...
+                 'strengths 8, 16 and 32; watermark sides 16, 32 ' ...
+                 'and 64. Changes: unchanged PNG, JPEG 95/75/50, ' ...
+                 'crop 5%/10% from each edge and resize 75%/50%. ' ...
+                 'Unavailable capacity settings are skipped.'], false);
+            app.addButton(layout, 3, 'evaluate', ...
+                'Run study on selected images', ...
+                @()app.runAction(@()app.runEvaluation(), ...
+                'Running robustness study...'), true);
+            app.EvaluationSummary = uitable(layout, ...
+                'ColumnName', {'Mode', 'Change', 'Exact', 'Total', ...
+                'Rate', 'Header', 'Incomplete', 'Checksum', ...
+                'Mean BER', 'Mean NCC'}, ...
+                'ColumnEditable', false(1, 10));
+            app.EvaluationSummary.Layout.Row = 4;
+            app.EvaluationDetails = uitable(layout, ...
+                'ColumnName', {'Mode', 'Strength', 'Side', 'Change', ...
+                'Recovery', 'PSNR dB', 'Block SSIM', 'BER', 'NCC'}, ...
+                'ColumnEditable', false(1, 9));
+            app.EvaluationDetails.Layout.Row = 5;
+            app.EvaluationNote = app.addLabel(layout, 6, ...
+                ['No study yet. Exact rate counts only verified, ' ...
+                 'pixel-identical prepared watermarks. BER and NCC ' ...
+                 'are unavailable when recovery returns no pixels; ' ...
+                 'their means use only recovered cases. ' ...
+                 'PSNR and block SSIM compare the working cover with ' ...
+                 'the image before each change.'], false);
+        end
+
         function buildPreviewArea(app, workspace)
-            right = uigridlayout(workspace, [2 1]);
+            right = uigridlayout(workspace, [7 1]);
+            app.RightLayout = right;
             right.Layout.Column = 2;
-            right.RowHeight = {88, '1x'};
-            right.RowSpacing = 12;
+            right.RowHeight = {78, 27, 1100, 270, 55, 27, 1280};
+            right.RowSpacing = 9;
             right.Padding = [0 0 0 0];
+            right.Scrollable = 'on';
             right.BackgroundColor = [1 1 1];
 
             statuses = uigridlayout(right, [1 3]);
@@ -289,28 +341,245 @@ classdef WatermarkApp < handle
             app.addStatusCard(statuses, 3, 'SAVED RESULT', 'Not saved', ...
                 'saved');
 
-            previews = uigridlayout(right, [2 3]);
+            stageHeading = uilabel(right, ...
+                'Text', '01  IMAGE → PREPARATION → HAAR DETAILS → RECOVERY', ...
+                'FontSize', 12, 'FontWeight', 'bold', ...
+                'FontColor', [38 100 53]/255);
+            stageHeading.Layout.Row = 2;
+
+            stages = uigridlayout(right, [3 2]);
+            stages.Layout.Row = 3;
+            stages.RowHeight = {360, 360, 360};
+            stages.ColumnWidth = {'1x', '1x'};
+            stages.RowSpacing = 10;
+            stages.ColumnSpacing = 8;
+            stages.Padding = [0 0 0 0];
+            stages.BackgroundColor = [1 1 1];
+            app.addStage(stages, 'source', '1  Original', ...
+                'Cover image', 1);
+            app.addStage(stages, 'input', '2  Image to hide', ...
+                'Selected watermark', 2);
+            app.addStage(stages, 'gray', '3  Prepared', ...
+                'Grayscale + fit', 3);
+            app.addStage(stages, 'haar', '4  Haar details', ...
+                'First 512 × 512 pixels · magnitude ×2 for display', 4);
+            app.addStage(stages, 'changed', '5  Embedded detail', ...
+                'First 512 × 512 pixels · change ×4 for display', 5);
+            app.addStage(stages, 'decoded', '6  Decoded', ...
+                'Recovered bytes', 6);
+
+            metrics = uigridlayout(right, [2 2]);
+            metrics.Layout.Row = 4;
+            metrics.RowHeight = {'1x', '1x'};
+            metrics.ColumnWidth = {'1x', '1x'};
+            metrics.RowSpacing = 8;
+            metrics.ColumnSpacing = 8;
+            metrics.Padding = [0 0 0 0];
+            metrics.BackgroundColor = [1 1 1];
+            app.addMetric(metrics, 1, 'psnr', 'COVER QUALITY · PSNR', ...
+                'Original cover → watermarked | 10log10(255²/MSE)');
+            app.addMetric(metrics, 2, 'ssim', 'COVER QUALITY · SSIM', ...
+                'Original cover → watermarked | 8×8 block luminance variant');
+            app.addMetric(metrics, 3, 'ber', 'RECOVERY · BER', ...
+                'Prepared grayscale → recovered | wrong bits / all bits');
+            app.addMetric(metrics, 4, 'ncc', 'RECOVERY · NCC', ...
+                'Prepared grayscale → recovered | normalized dot product');
+
+            evidenceNote = uilabel(right, ...
+                'Text', ['Scores evaluate outputs; they do not create ' ...
+                    'the watermark. No universal pass threshold applies. ' ...
+                    'The Haar map shows only the first 512 × 512 ' ...
+                    'pixels at 2× and coefficient changes at 4× ' ...
+                    'for visualization. See Evaluate for measured ' ...
+                    'recovery under specified changes.'], ...
+                'FontSize', 10, 'WordWrap', 'on', ...
+                'FontColor', [0 0 0]);
+            evidenceNote.Layout.Row = 5;
+
+            resultHeading = uilabel(right, ...
+                'Text', '02  RESULT IMAGES  •  Compare the true pixels below', ...
+                'FontSize', 12, 'FontWeight', 'bold', ...
+                'FontColor', [38 100 53]/255);
+            resultHeading.Layout.Row = 6;
+
+            previews = uigridlayout(right, [3 2]);
             app.PreviewGrid = previews;
-            previews.Layout.Row = 2;
-            previews.RowHeight = {'1x', '1x'};
-            previews.ColumnWidth = {'1x', '1x', '1x'};
+            previews.Layout.Row = 7;
+            previews.RowHeight = {420, 420, 420};
+            previews.ColumnWidth = {'1x', '1x'};
             previews.RowSpacing = 10;
             previews.ColumnSpacing = 10;
             previews.Padding = [0 0 0 0];
-            previews.Scrollable = 'on';
             previews.BackgroundColor = [1 1 1];
 
             app.addPreview(previews, 'cover', 'Original image', 1, 1);
             app.addPreview(previews, 'watermark', ...
                 'Image to hide', 1, 2);
             app.addPreview(previews, 'prepared', ...
-                'Prepared grayscale image', 1, 3);
+                'Prepared grayscale image', 2, 1);
             app.addPreview(previews, 'watermarked', ...
-                'Watermarked image', 2, 1);
+                'Watermarked image', 2, 2);
             app.addPreview(previews, 'extracted', ...
-                'Recovered watermark', 2, 2);
+                'Recovered watermark', 3, 1);
             app.addPreview(previews, 'comparison', ...
-                'Compare images', 2, 3);
+                'Compare images', 3, 2);
+            app.refreshEvidence();
+        end
+
+        function addStage(app, parent, name, title, detailText, index)
+            card = uipanel(parent, 'BorderType', 'line', ...
+                'BackgroundColor', [1 1 1]);
+            card.Layout.Row = ceil(index/2);
+            card.Layout.Column = mod(index-1, 2) + 1;
+            layout = uigridlayout(card, [3 1]);
+            layout.RowHeight = {28, '1x', 32};
+            layout.Padding = [12 10 12 10];
+            layout.RowSpacing = 2;
+            titleLabel = uilabel(layout, 'Text', title, ...
+                'FontSize', 12, 'FontWeight', 'bold', ...
+                'FontColor', [38 100 53]/255);
+            titleLabel.Layout.Row = 1;
+            axesHandle = uiaxes(layout);
+            axesHandle.Layout.Row = 2;
+            axesHandle.Toolbar.Visible = 'off';
+            app.StageAxes.(name) = axesHandle;
+            detail = uilabel(layout, 'Text', detailText, ...
+                'WordWrap', 'on', 'FontSize', 11, ...
+                'FontColor', [0 0 0]);
+            detail.Layout.Row = 3;
+            app.StageDetails.(name) = detail;
+        end
+
+        function addMetric(app, parent, index, name, title, formula)
+            card = uipanel(parent, 'BorderType', 'line', ...
+                'BackgroundColor', [1 1 1]);
+            card.Layout.Row = ceil(index/2);
+            card.Layout.Column = mod(index-1, 2) + 1;
+            layout = uigridlayout(card, [3 1]);
+            layout.RowHeight = {23, 44, '1x'};
+            layout.Padding = [10 7 10 7];
+            heading = uilabel(layout, 'Text', title, ...
+                'FontSize', 11, 'FontWeight', 'bold', ...
+                'FontColor', [38 100 53]/255);
+            heading.Layout.Row = 1;
+            value = uilabel(layout, 'Text', 'Waiting for images', ...
+                'FontSize', 17, 'FontWeight', 'bold', ...
+                'FontColor', [0 0 0], 'WordWrap', 'on');
+            value.Layout.Row = 2;
+            app.MetricValues.(name) = value;
+            explanation = uilabel(layout, 'Text', formula, ...
+                'FontSize', 9, 'WordWrap', 'on', ...
+                'FontColor', [0 0 0]);
+            explanation.Layout.Row = 3;
+        end
+
+        function refreshEvidence(app)
+            if isempty(fieldnames(app.StageAxes))
+                return;
+            end
+            original = app.Images.cover;
+            if app.PreviewOnly
+                original = app.PreviewCover;
+            end
+            app.showStage('source', app.Images.cover);
+            app.showStage('input', app.Images.watermark);
+            app.showStage('gray', app.Images.prepared);
+            app.showStage('decoded', app.Images.extracted);
+            app.showStage('haar', []);
+            app.showStage('changed', []);
+
+            if ~isempty(original)
+                [horizontal, vertical] = app.haarDetails(original);
+                magnitude = sqrt(horizontal.^2 + vertical.^2);
+                app.showStage('haar', uint8(min(255, 2*magnitude)));
+                if ~isempty(app.Images.watermarked) && ...
+                        isequal(size(original), size(app.Images.watermarked))
+                    [markedHorizontal, markedVertical] = ...
+                        app.haarDetails(app.Images.watermarked);
+                    coefficientChange = sqrt( ...
+                        (horizontal-markedHorizontal).^2 + ...
+                        (vertical-markedVertical).^2);
+                    app.showStage('changed', ...
+                        uint8(min(255, 4*coefficientChange)));
+                end
+            end
+
+            app.MetricValues.psnr.Text = 'Need both images';
+            app.MetricValues.ssim.Text = 'Need both images';
+            app.MetricValues.ber.Text = 'Need both marks';
+            app.MetricValues.ncc.Text = 'Need both marks';
+            if isempty(original) && ~isempty(app.Images.watermarked)
+                app.MetricValues.psnr.Text = 'Reference unavailable';
+                app.MetricValues.ssim.Text = 'Reference unavailable';
+            end
+            if isempty(app.Images.prepared) && ...
+                    ~isempty(app.Images.extracted)
+                app.MetricValues.ber.Text = 'Reference unavailable';
+                app.MetricValues.ncc.Text = 'Reference unavailable';
+            end
+            if ~isempty(original) && ...
+                    ~isempty(app.Images.watermarked) && ...
+                    isequal(size(original), size(app.Images.watermarked))
+                quality = WatermarkEngine.psnr( ...
+                    original, app.Images.watermarked);
+                structure = WatermarkEngine.ssim( ...
+                    original, app.Images.watermarked);
+                app.MetricValues.psnr.Text = sprintf('%.2f dB', quality);
+                app.MetricValues.ssim.Text = sprintf('%.4f', structure);
+            end
+            if ~isempty(app.Images.prepared) && ...
+                    ~isempty(app.Images.extracted) && ...
+                    isequal(size(app.Images.prepared), ...
+                        size(app.Images.extracted))
+                bitRate = WatermarkEngine.bitErrorRate( ...
+                    app.Images.prepared, app.Images.extracted);
+                correlation = WatermarkEngine.normalizedCorrelation( ...
+                    app.Images.prepared, app.Images.extracted);
+                app.MetricValues.ber.Text = sprintf('%.3f%%', 100*bitRate);
+                if isfinite(correlation)
+                    app.MetricValues.ncc.Text = ...
+                        sprintf('%.5f', correlation);
+                else
+                    app.MetricValues.ncc.Text = 'Undefined';
+                end
+            end
+        end
+
+        function showStage(app, name, imageData)
+            axesHandle = app.StageAxes.(name);
+            cla(axesHandle);
+            if isempty(imageData)
+                text(axesHandle, 0.5, 0.5, 'Waiting', ...
+                    'HorizontalAlignment', 'center', ...
+                    'VerticalAlignment', 'middle', ...
+                    'FontSize', 9, 'Color', [0 0 0]);
+                xlim(axesHandle, [0 1]);
+                ylim(axesHandle, [0 1]);
+            elseif ismatrix(imageData)
+                imagesc(axesHandle, imageData, [0 255]);
+                colormap(axesHandle, gray(256));
+                axis(axesHandle, 'image');
+            else
+                image(axesHandle, imageData);
+                axis(axesHandle, 'image');
+            end
+            axis(axesHandle, 'off');
+        end
+
+        function [horizontal, vertical] = haarDetails(~, imageData)
+            values = double(imageData);
+            if ndims(values) == 3
+                values = 0.299*values(:,:,1) + ...
+                    0.587*values(:,:,2) + 0.114*values(:,:,3);
+            end
+            height = 2*floor(min(512, size(values, 1))/2);
+            width = 2*floor(min(512, size(values, 2))/2);
+            a = values(1:2:height, 1:2:width);
+            b = values(1:2:height, 2:2:width);
+            c = values(2:2:height, 1:2:width);
+            d = values(2:2:height, 2:2:width);
+            horizontal = (a-b+c-d)/2;
+            vertical = (a+b-c-d)/2;
         end
 
         function buildFooter(app, page)
@@ -394,7 +663,7 @@ classdef WatermarkApp < handle
             card.Layout.Column = column;
             app.PreviewCards.(name) = card;
             layout = uigridlayout(card, [4 1]);
-            layout.RowHeight = {28, '1x', 20, 29};
+            layout.RowHeight = {32, '1x', 24, 34};
             layout.RowSpacing = 4;
             layout.Padding = [10 8 10 8];
             layout.BackgroundColor = [1 1 1];
@@ -407,14 +676,14 @@ classdef WatermarkApp < handle
                 app.ComparisonMenu.Layout.Row = 1;
             else
                 heading = uilabel(layout, 'Text', title, ...
-                    'FontSize', 12, 'FontWeight', 'bold', ...
+                    'FontSize', 13, 'FontWeight', 'bold', ...
                     'FontColor', [0 0 0]);
                 heading.Layout.Row = 1;
             end
 
             axesHandle = uiaxes(layout);
             axesHandle.Layout.Row = 2;
-            axesHandle.Toolbar.Visible = 'on';
+            axesHandle.Toolbar.Visible = 'off';
             app.PreviewAxes.(name) = axesHandle;
 
             detail = uilabel(layout, ...
@@ -446,20 +715,18 @@ classdef WatermarkApp < handle
                 'watermarked', 'extracted', 'comparison'};
             if app.Window.Position(3) < 1080
                 app.WorkspaceLayout.ColumnWidth = {300, '1x'};
-                app.PreviewGrid.RowHeight = {220, 220, 220};
-                app.PreviewGrid.ColumnWidth = {'1x', '1x'};
-                columns = 2;
             else
                 app.WorkspaceLayout.ColumnWidth = {340, '1x'};
-                app.PreviewGrid.RowHeight = {'1x', '1x'};
-                app.PreviewGrid.ColumnWidth = {'1x', '1x', '1x'};
-                columns = 3;
             end
+            app.RightLayout.RowHeight = ...
+                {78, 27, 1100, 270, 55, 27, 1280};
+            app.PreviewGrid.RowHeight = {420, 420, 420};
+            app.PreviewGrid.ColumnWidth = {'1x', '1x'};
 
             for index = 1:numel(names)
                 card = app.PreviewCards.(names{index});
-                card.Layout.Row = ceil(index/columns);
-                card.Layout.Column = mod(index-1, columns) + 1;
+                card.Layout.Row = ceil(index/2);
+                card.Layout.Column = mod(index-1, 2) + 1;
             end
         end
 
@@ -552,6 +819,83 @@ classdef WatermarkApp < handle
             mode = lower(app.ModeMenu.Value);
         end
 
+        function state = recoveryState(~, recovered, prepared)
+            if ~recovered.verified
+                state = 'Checksum failed; approximate';
+            elseif isempty(prepared)
+                state = 'Verified payload CRC';
+            elseif isequal(recovered.watermark, prepared)
+                state = 'Verified exact';
+            else
+                state = 'Verified, pixels differ';
+            end
+        end
+
+        function clearEvaluation(app)
+            app.EvaluationSummary.Data = cell(0, 10);
+            app.EvaluationDetails.Data = cell(0, 9);
+            app.EvaluationNote.Text = [ ...
+                'No study for this image pair yet. Exact rate counts ' ...
+                'only checksum-verified, pixel-identical prepared marks.'];
+        end
+
+        function runEvaluation(app)
+            if isempty(app.Images.cover) || isempty(app.Images.watermark)
+                error('Watermark:Input', ...
+                    'Choose an original image and an image to hide first.');
+            end
+            report = WatermarkEngine.evaluateRobustness( ...
+                app.Images.cover, app.Images.watermark, ...
+                @(step, total)app.updateEvaluationProgress(step, total));
+            summary = report.summary;
+            details = report.details;
+            for row = 1:size(summary, 1)
+                summary{row, 5} = sprintf('%.1f%%', ...
+                    100*summary{row, 5});
+                for column = [9 10]
+                    if isnan(summary{row, column})
+                        summary{row, column} = 'N/A';
+                    else
+                        summary{row, column} = sprintf('%.4f', ...
+                            summary{row, column});
+                    end
+                end
+            end
+            for row = 1:size(details, 1)
+                for column = 6:9
+                    if isnan(details{row, column})
+                        details{row, column} = 'N/A';
+                    else
+                        details{row, column} = sprintf('%.4f', ...
+                            details{row, column});
+                    end
+                end
+            end
+            app.EvaluationSummary.Data = summary;
+            app.EvaluationDetails.Data = details;
+            working = report.workingSize;
+            app.EvaluationNote.Text = sprintf( ...
+                ['Study uses %d × %d working cover pixels; %d ' ...
+                'configurations skipped for capacity. Exact rate = ' ...
+                'verified, pixel-identical prepared marks / tested ' ...
+                'cases. Header, Incomplete and Checksum count distinct ' ...
+                'failure states. N/A means extraction returned no watermark. ' ...
+                'Mean BER and NCC use only recovered cases. ' ...
+                'PSNR and 8×8 block SSIM use the working cover and ' ...
+                'watermarked image before the listed change.'], ...
+                working(2), working(1), ...
+                report.skippedConfigurations);
+            app.setStatus(sprintf( ...
+                'Study complete: %d tested cases; %d settings skipped.', ...
+                size(details, 1), report.skippedConfigurations));
+        end
+
+        function updateEvaluationProgress(app, step, total)
+            app.setStatus(sprintf( ...
+                'Evaluating configuration %d of %d...', step, total));
+            drawnow limitrate;
+        end
+
         function invalidateResult(app)
             app.PreviewOnly = false;
             app.PreviewCover = [];
@@ -562,11 +906,13 @@ classdef WatermarkApp < handle
             app.LastQuality = NaN;
             app.LastRecoveredStrength = NaN;
             app.LastRecoveryVerified = false;
+            app.LastRecoveryState = 'Not checked';
             app.showImage('watermarked', []);
             app.showImage('extracted', []);
             app.showImage('comparison', []);
             app.StatusCards.verification.Text = 'Not checked';
             app.StatusCards.saved.Text = 'Not saved';
+            app.refreshEvidence();
         end
 
         function embedWhenReady(app)
@@ -624,11 +970,12 @@ classdef WatermarkApp < handle
                 app.PreviewOnly = true;
                 app.PreviewCover = crop;
                 app.Images.watermarked = preview.image;
-                app.Images.extracted = preview.preparedWatermark;
+                recoveredPreview = WatermarkEngine.extract(preview.image);
+                app.Images.extracted = recoveredPreview.watermark;
                 app.LastQuality = preview.psnr;
                 app.LastSavedPath = '';
                 app.showImage('watermarked', preview.image);
-                app.showImage('extracted', preview.preparedWatermark);
+                app.showImage('extracted', recoveredPreview.watermark);
                 app.refreshComparison();
                 app.PreviewDetails.watermarked.Text = sprintf( ...
                     'Live crop preview • %d%%', percentage);
@@ -677,6 +1024,7 @@ classdef WatermarkApp < handle
                     app.Images.watermark, [side side]);
             end
             app.showImage('prepared', app.Images.prepared);
+            app.refreshEvidence();
         end
 
         function refreshControls(app)
@@ -719,6 +1067,7 @@ classdef WatermarkApp < handle
             available = struct( ...
                 'sample', true, 'cover', true, 'watermark', true, ...
                 'watermarked', true, ...
+                'evaluate', inputCount == 2, ...
                 'embed', valid && hasCapacity && inputCount == 2, ...
                 'extract', ~isempty(app.Images.watermarked) && ...
                     ~app.PreviewOnly, ...
@@ -827,6 +1176,7 @@ classdef WatermarkApp < handle
             end
 
             app.Images.(name) = imageData;
+            app.clearEvaluation();
             app.ImagePaths.(name) = path;
             app.showImage(name, imageData);
 
@@ -843,17 +1193,16 @@ classdef WatermarkApp < handle
                 app.showImage('extracted', recovered.watermark);
                 app.LastRecoveredStrength = recovered.strength;
                 app.LastRecoveryVerified = recovered.verified;
+                app.LastRecoveryState = app.recoveryState(recovered, []);
                 app.LastQuality = NaN;
                 app.LastSavedPath = '';
-                if recovered.verified
-                    app.StatusCards.verification.Text = 'Exact recovery';
-                else
-                    app.StatusCards.verification.Text = 'Approximate';
-                end
+                app.StatusCards.verification.Text = app.LastRecoveryState;
                 app.StatusCards.saved.Text = 'Source PNG loaded';
                 if recovered.verified
                     app.setStatus(sprintf( ...
-                        'Recovered a %d × %d watermark from the PNG.', ...
+                        ['Recovered a %d × %d watermark from the PNG. ' ...
+                        'Payload checksum verified; original reference ' ...
+                        'is unavailable.'], ...
                         size(recovered.watermark, 2), ...
                         size(recovered.watermark, 1)));
                 else
@@ -872,6 +1221,7 @@ classdef WatermarkApp < handle
                 app.LastQuality = NaN;
                 app.LastRecoveredStrength = NaN;
                 app.LastRecoveryVerified = false;
+                app.LastRecoveryState = 'Not checked';
                 if sourceInfo.Width ~= size(imageData, 2) || ...
                         sourceInfo.Height ~= size(imageData, 1)
                     app.setStatus(sprintf( ...
@@ -909,6 +1259,8 @@ classdef WatermarkApp < handle
             app.LastQuality = result.psnr;
             app.LastRecoveredStrength = recovered.strength;
             app.LastRecoveryVerified = recovered.verified;
+            app.LastRecoveryState = app.recoveryState( ...
+                recovered, app.Images.prepared);
             app.LastSavedPath = '';
             app.PreviewOnly = false;
             app.PreviewCover = [];
@@ -916,7 +1268,7 @@ classdef WatermarkApp < handle
             app.showImage('watermarked', app.Images.watermarked);
             app.showImage('extracted', app.Images.extracted);
             app.refreshComparison();
-            app.StatusCards.verification.Text = 'Exact recovery';
+            app.StatusCards.verification.Text = app.LastRecoveryState;
             app.StatusCards.saved.Text = 'Not saved';
             app.setStatus( ...
                 'Created and verified. Save the watermarked PNG to keep it.');
@@ -931,15 +1283,18 @@ classdef WatermarkApp < handle
             app.Images.extracted = recovered.watermark;
             app.LastRecoveredStrength = recovered.strength;
             app.LastRecoveryVerified = recovered.verified;
+            app.LastRecoveryState = app.recoveryState( ...
+                recovered, app.Images.prepared);
             app.showImage('extracted', recovered.watermark);
+            app.refreshEvidence();
             if recovered.verified
-                app.StatusCards.verification.Text = 'Exact recovery';
+                app.StatusCards.verification.Text = app.LastRecoveryState;
                 app.setStatus(sprintf( ...
                     'Recovered a %d × %d watermark. Strength: %d.', ...
                     size(recovered.watermark, 2), ...
                     size(recovered.watermark, 1), recovered.strength));
             else
-                app.StatusCards.verification.Text = 'Approximate';
+                app.StatusCards.verification.Text = app.LastRecoveryState;
                 app.setStatus( ...
                     ['Approximate recovery: payload checksum failed. ' ...
                      'Inspect the recovered watermark before using it.']);
@@ -950,6 +1305,7 @@ classdef WatermarkApp < handle
             example = app.Gallery.nextExample();
             [app.Images.cover, app.Images.watermark] = ...
                 app.Gallery.loadExample(example);
+            app.clearEvaluation();
             app.ImagePaths.cover = example.coverPath;
             app.ImagePaths.watermark = example.watermarkPath;
             app.StrengthField.Value = '16';
@@ -996,6 +1352,7 @@ classdef WatermarkApp < handle
                 app.PreviewDetails.comparison.Text = ...
                     'Difference amplified 4× for display';
             end
+            app.refreshEvidence();
         end
 
         function saveWithDialog(app, name)
@@ -1023,12 +1380,11 @@ classdef WatermarkApp < handle
                 recovered = WatermarkEngine.extract(reopened);
                 app.Images.extracted = recovered.watermark;
                 app.LastRecoveryVerified = recovered.verified;
+                app.LastRecoveryState = app.recoveryState( ...
+                    recovered, app.Images.prepared);
                 app.showImage('extracted', recovered.watermark);
-                if recovered.verified
-                    app.StatusCards.verification.Text = 'Exact recovery';
-                else
-                    app.StatusCards.verification.Text = 'Approximate';
-                end
+                app.refreshEvidence();
+                app.StatusCards.verification.Text = app.LastRecoveryState;
                 app.StatusCards.saved.Text = 'PNG verified';
             else
                 app.StatusCards.saved.Text = 'Watermark PNG saved';
@@ -1070,21 +1426,46 @@ classdef WatermarkApp < handle
                 lines{end+1} = ['Mode: ' app.ModeMenu.Value];
             end
             if ~isempty(app.Images.extracted)
-                if app.PreviewOnly
-                    lines{end+1} = 'Recovery: live crop preview';
-                elseif ~app.LastRecoveryVerified
-                    lines{end+1} = 'Recovery: approximate; checksum failed';
-                else
-                    lines{end+1} = 'Recovery: exact, checksums passed';
-                end
+                lines{end+1} = ['Recovery: ' app.LastRecoveryState];
                 if isfinite(app.LastRecoveredStrength)
                     lines{end+1} = sprintf( ...
                         'Stored strength: %d', app.LastRecoveredStrength);
                 end
             end
             if isfinite(app.LastQuality)
+                if app.PreviewOnly
+                    lines{end+1} = sprintf( ...
+                        'Crop preview PSNR: %.2f dB', app.LastQuality);
+                else
+                    lines{end+1} = sprintf( ...
+                        'Cover PSNR: %.2f dB', app.LastQuality);
+                end
+            end
+            comparisonCover = app.Images.cover;
+            if app.PreviewOnly
+                comparisonCover = app.PreviewCover;
+            end
+            if ~isempty(comparisonCover) && ...
+                    ~isempty(app.Images.watermarked) && ...
+                    isequal(size(comparisonCover), ...
+                        size(app.Images.watermarked))
                 lines{end+1} = sprintf( ...
-                    'Image quality: %.2f dB PSNR', app.LastQuality);
+                        '8x8 block luminance SSIM variant: %.4f', ...
+                    WatermarkEngine.ssim( ...
+                        comparisonCover, app.Images.watermarked));
+            end
+            if ~isempty(app.Images.prepared) && ...
+                    ~isempty(app.Images.extracted) && ...
+                    isequal(size(app.Images.prepared), ...
+                        size(app.Images.extracted))
+                lines{end+1} = sprintf( ...
+                    'Recovered bit error rate: %.3f%%', ...
+                    100*WatermarkEngine.bitErrorRate( ...
+                        app.Images.prepared, app.Images.extracted));
+                lines{end+1} = sprintf( ...
+                    'Watermark normalized correlation: %.5f', ...
+                    WatermarkEngine.normalizedCorrelation( ...
+                        app.Images.prepared, app.Images.extracted));
             end
             if ~isempty(app.LastSavedPath)
                 lines{end+1} = ['Saved: ' app.LastSavedPath];

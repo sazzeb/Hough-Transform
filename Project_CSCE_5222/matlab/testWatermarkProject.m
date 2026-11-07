@@ -14,6 +14,36 @@ function testWatermarkProject()
         HaarTransform.inverse(HaarTransform.forward(blocks)), ...
         blocks));
 
+    metricCover = repmat(uint8(100), 8, 8, 3);
+    metricChanged = repmat(uint8(110), 8, 8, 3);
+    assert(WatermarkEngine.ssim(metricCover, metricCover) == 1);
+    assert(isinf(WatermarkEngine.psnr(metricCover, metricCover)));
+    assert(abs(WatermarkEngine.psnr(metricCover, metricChanged) - ...
+        20*log10(255/10)) < 1e-10);
+    assert(WatermarkEngine.ssim(metricCover, metricChanged) < 1);
+    metricOriginal = uint8([1 0]);
+    metricRecovered = uint8([1 1]);
+    assert(WatermarkEngine.bitErrorRate( ...
+        metricOriginal, metricRecovered) == 1/16);
+    assert(abs(WatermarkEngine.normalizedCorrelation( ...
+        metricOriginal, metricRecovered) - 1/sqrt(2)) < 1e-12);
+    assert(isnan(WatermarkEngine.normalizedCorrelation( ...
+        uint8([0 0]), metricRecovered)));
+
+    studyCover = repmat(uint8(128), 192, 192);
+    studyMark = reshape(uint8(0:255), 16, 16);
+    study = WatermarkEngine.evaluateRobustness( ...
+        studyCover, studyMark);
+    assert(size(study.details, 1) == 72);
+    assert(size(study.summary, 1) == 24);
+    assert(study.skippedConfigurations == 18);
+    unchanged = strcmp(study.details(:, 4), 'Unchanged PNG');
+    assert(all(strcmp(study.details(unchanged, 5), ...
+        'Verified exact')));
+    assert(all(cell2mat(study.details(unchanged, 8)) == 0));
+    assert(all(cell2mat(study.summary(:, 5)) >= 0 & ...
+        cell2mat(study.summary(:, 5)) <= 1));
+
     watermark = uint8(randi([0 255], 37, 49, 3));
 
     shapes = {

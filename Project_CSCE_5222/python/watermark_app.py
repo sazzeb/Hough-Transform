@@ -32,6 +32,7 @@ class ImagePreview(tk.Frame):
         title,
         pixelated=False,
         placeholder="Choose an image to preview",
+        description=None,
     ):
         super().__init__(
             parent,
@@ -57,6 +58,14 @@ class ImagePreview(tk.Frame):
             font=("Helvetica", 12, "bold"),
             anchor="w",
         ).pack(side="left")
+
+        if description is not None:
+            tk.Label(
+                self, text=description,
+                bg=PALETTE["surface"], fg=PALETTE["muted"],
+                font=("Helvetica", 9), anchor="w",
+                justify="left", wraplength=132,
+            ).pack(fill="x", padx=10)
 
         self.details = tk.Label(
             self,
@@ -186,7 +195,7 @@ class WatermarkApp:
         self.root = root
 
         self.root.title("Wavelet Watermark Studio")
-        self.root.geometry("1180x790")
+        self.root.geometry("1360x860")
         self.root.minsize(900, 680)
         self.root.configure(bg=PALETTE["background"])
 
@@ -202,6 +211,8 @@ class WatermarkApp:
         )
 
         self.previews = {}
+        self.stage_previews = {}
+        self.metric_values = {}
         self.buttons = {}
         self.example_gallery = ExampleGallery()
         self.current_example = None
@@ -215,7 +226,9 @@ class WatermarkApp:
         self.mode = tk.StringVar(value="Balanced")
         self.strength_percent = tk.StringVar(value="Strength: 33%  •  16/32")
         self.preview_only = False
+        self.preview_cover = None
         self.recovery_verified = False
+        self.recovery_state = "Not checked"
         self.preview_job = None
         self.pending_full_refresh = False
         self._syncing_strength = False
@@ -367,9 +380,10 @@ class WatermarkApp:
         self.side_box.bind("<Return>", self._strength_release)
         tk.Label(
             controls,
-            text=("0% is minimum strength; 100% is maximum. "
-                  "Durable adds redundancy for limited pixel damage. "
-                  "Keep the original PNG; JPEG and resizing still break recovery."),
+            text=("0–100% controls strength 8–32; it is not the percentage "
+                  "of pixels changed. Durable adds redundancy against "
+                  "limited pixel damage. "
+                  "Keep the original PNG; JPEG, cropping and resizing may prevent recovery."),
             bg=PALETTE["surface"], fg=PALETTE["text"],
             wraplength=218, justify="left", anchor="w",
         ).pack(fill="x", pady=(3, 1))
@@ -393,8 +407,139 @@ class WatermarkApp:
             lambda: self.save("extracted"),
         )
 
-        previews = tk.Frame(workspace, bg=PALETTE["background"])
-        previews.grid(row=0, column=1, sticky="nsew")
+        self._section(controls, "05  EVALUATE")
+        self._button(
+            controls, "evaluate", "Run robustness study",
+            self.run_evaluation,
+        )
+        tk.Label(
+            controls,
+            text="Uses the selected image pair at up to 512 pixels per side.",
+            bg=PALETTE["surface"], fg=PALETTE["muted"],
+            wraplength=218, justify="left", anchor="w",
+        ).pack(fill="x", pady=(3, 4))
+
+        evidence = tk.Frame(workspace, bg=PALETTE["background"])
+        evidence.grid(row=0, column=1, sticky="nsew")
+        evidence.grid_rowconfigure(0, weight=1)
+        evidence.grid_columnconfigure(0, weight=1)
+        evidence_canvas = tk.Canvas(
+            evidence, bg=PALETTE["background"], highlightthickness=0
+        )
+        evidence_scroll = ttk.Scrollbar(
+            evidence, orient="vertical", command=evidence_canvas.yview
+        )
+        evidence_canvas.configure(yscrollcommand=evidence_scroll.set)
+        evidence_canvas.grid(row=0, column=0, sticky="nsew")
+        evidence_scroll.grid(row=0, column=1, sticky="ns")
+        content = tk.Frame(evidence_canvas, bg=PALETTE["background"])
+        content_window = evidence_canvas.create_window(
+            (0, 0), window=content, anchor="nw"
+        )
+        content.bind(
+            "<Configure>",
+            lambda _event: evidence_canvas.configure(
+                scrollregion=evidence_canvas.bbox("all")
+            ),
+        )
+        evidence_canvas.bind(
+            "<Configure>",
+            lambda event: evidence_canvas.itemconfigure(
+                content_window, width=event.width
+            ),
+        )
+
+        self._section(content, "01  IMAGE → PREPARATION → HAAR DETAILS → RECOVERY")
+        stage_grid = tk.Frame(content, bg=PALETTE["background"])
+        stage_grid.pack(fill="x", pady=(3, 9))
+        stages = (
+            ("source", "1  Original", "Cover image"),
+            ("input", "2  Image to hide", "Selected watermark"),
+            ("gray", "3  Prepared", "Grayscale + fit"),
+            ("haar", "4  Haar details", "First 512 × 512 · magnitude ×2 for display"),
+            ("changed", "5  Embedded detail", "First 512 × 512 · change ×4 for display"),
+            ("decoded", "6  Decoded", "Recovered bytes"),
+        )
+        for index, (name, caption, placeholder) in enumerate(stages):
+            panel = ImagePreview(
+                stage_grid, caption,
+                pixelated=name in {"gray", "decoded"},
+                placeholder=placeholder,
+                description=placeholder,
+            )
+            panel.configure(height=340)
+            panel.canvas.configure(height=250)
+            panel.grid(
+                row=index // 2, column=index % 2,
+                sticky="nsew", padx=5, pady=5,
+            )
+            panel.pack_propagate(False)
+            self.stage_previews[name] = panel
+        for column in range(2):
+            stage_grid.grid_columnconfigure(
+                column, weight=1, uniform="stage"
+            )
+
+        tk.Label(
+            content,
+            text=("Haar maps show the first 512 × 512 pixels. The ×4 "
+                  "coefficient map is display-only; scores use true pixels."),
+            bg=PALETTE["background"], fg=PALETTE["muted"],
+            anchor="w", justify="left", wraplength=760,
+        ).pack(fill="x", pady=(0, 7))
+
+        self._section(content, "QUALITY AND RECOVERY SCORES")
+        measures = tk.Frame(content, bg=PALETTE["background"])
+        measures.pack(fill="x", pady=(0, 12))
+        metric_specs = (
+            ("psnr", "COVER · PSNR", "Original → watermarked · 10log10(255²/MSE)"),
+            ("ssim", "COVER · SSIM", "Original → watermarked · 8×8 block luminance variant"),
+            ("ber", "RECOVERY · BER", "Prepared grayscale → recovered · wrong bits / all bits"),
+            ("ncc", "RECOVERY · NCC", "Prepared grayscale → recovered · normalized dot product"),
+        )
+        for index, (name, title, formula) in enumerate(metric_specs):
+            card = tk.Frame(
+                measures, bg=PALETTE["surface"],
+                highlightbackground=PALETTE["border"],
+                highlightthickness=1,
+            )
+            card.grid(
+                row=index // 2, column=index % 2,
+                sticky="nsew", padx=5, pady=5,
+            )
+            measures.grid_columnconfigure(index % 2, weight=1, uniform="metric")
+            tk.Label(
+                card, text=title, bg=PALETTE["surface"],
+                fg=PALETTE["accent"], font=("Helvetica", 11, "bold"),
+                anchor="w",
+            ).pack(fill="x", padx=9, pady=(8, 2))
+            value = tk.Label(
+                card, text="Waiting for images", bg=PALETTE["surface"],
+                fg=PALETTE["text"], font=("Helvetica", 16, "bold"),
+                anchor="w", wraplength=160,
+            )
+            value.pack(fill="x", padx=9)
+            self.metric_values[name] = value
+            tk.Label(
+                card, text=formula, bg=PALETTE["surface"],
+                fg=PALETTE["muted"], font=("Helvetica", 9),
+                anchor="w", justify="left", wraplength=160,
+            ).pack(fill="x", padx=9, pady=(3, 8))
+
+        tk.Label(
+            content,
+            text=("Scores evaluate outputs; they do not create the watermark. "
+                  "There is no universal pass threshold. The Haar map shows "
+                  "only the first 512 × 512 pixels at 2× and coefficient "
+                  "changes at 4× for visualization. See the robustness study "
+                  "for measured recovery under specified changes."),
+            bg=PALETTE["background"], fg=PALETTE["text"],
+            anchor="w", justify="left", wraplength=760,
+        ).pack(fill="x", pady=(0, 9))
+
+        self._section(content, "02  RESULT IMAGES · TRUE PIXELS")
+        previews = tk.Frame(content, bg=PALETTE["background"])
+        previews.pack(fill="x")
 
         captions = (
             ("cover", "Original image", "Choose an original image"),
@@ -402,7 +547,7 @@ class WatermarkApp:
             ("prepared", "Prepared watermark", "See the fitted watermark"),
             ("watermarked", "Watermarked image", "Embed to see the result"),
             ("extracted", "Recovered watermark", "Recover a watermark"),
-            ("difference", "Change map ×4", "See amplified changes"),
+            ("difference", "Difference · 4× display only", "See amplified changes"),
         )
 
         for index, (name, caption, placeholder) in enumerate(captions):
@@ -413,18 +558,56 @@ class WatermarkApp:
                 placeholder=placeholder,
             )
             panel.grid(
-                row=index // 3,
-                column=index % 3,
+                row=index // 2,
+                column=index % 2,
                 padx=5,
                 pady=5,
                 sticky="nsew",
             )
             self.previews[name] = panel
+            panel.configure(height=400)
+            panel.pack_propagate(False)
 
-        for index in range(2):
-            previews.grid_rowconfigure(index, weight=1)
         for index in range(3):
-            previews.grid_columnconfigure(index, weight=1)
+            previews.grid_rowconfigure(index, weight=1)
+        for index in range(2):
+            previews.grid_columnconfigure(index, weight=1, uniform="preview")
+
+        self._section(content, "03  ROBUSTNESS STUDY · MEASURED CASES")
+        tk.Label(
+            content,
+            text=("Selected image pair fitted within 512 px. Classic, Balanced "
+                  "and Durable × strengths 8/16/32 × sides 16/32/64. "
+                  "Changes: unchanged PNG, JPEG 95/75/50, crop 5%/10% "
+                  "from each edge, resize 75%/50%. Settings beyond "
+                  "cover capacity are skipped."),
+            bg=PALETTE["background"], fg=PALETTE["text"],
+            anchor="w", justify="left", wraplength=760,
+        ).pack(fill="x", pady=(3, 8))
+        self.study_summary = self._study_table(
+            content,
+            ("Mode", "Change", "Exact", "Total", "Rate", "Header",
+             "Incomplete", "Checksum", "Mean BER", "Mean NCC"),
+            8,
+        )
+        self.study_details = self._study_table(
+            content,
+            ("Mode", "Strength", "Side", "Change", "Recovery",
+             "PSNR dB", "Block SSIM", "BER", "NCC"),
+            10,
+        )
+        self.study_note = tk.Label(
+            content,
+            text=("No study for this image pair yet. Exact rate counts only "
+                  "checksum-verified, pixel-identical prepared marks. "
+                  "N/A means extraction returned no watermark. Mean BER and "
+                  "NCC use only cases with recovered pixels. "
+                  "PSNR and block SSIM compare the working cover with "
+                  "the watermarked image before each change."),
+            bg=PALETTE["background"], fg=PALETTE["text"],
+            anchor="w", justify="left", wraplength=760,
+        )
+        self.study_note.pack(fill="x", pady=(5, 12))
 
         footer = tk.Frame(self.root, bg=PALETTE["surface"])
         footer.pack(fill="x", side="bottom")
@@ -451,6 +634,25 @@ class WatermarkApp:
                 wraplength=max(200, event.width - 40)
             ),
         )
+
+    @staticmethod
+    def _study_table(parent, headings, height):
+        frame = tk.Frame(parent, bg=PALETTE["background"])
+        frame.pack(fill="x", pady=(0, 9))
+        frame.grid_columnconfigure(0, weight=1)
+        table = ttk.Treeview(
+            frame, columns=headings, show="headings", height=height
+        )
+        for heading in headings:
+            table.heading(heading, text=heading)
+            table.column(heading, width=118, minwidth=90, stretch=False)
+        vertical = ttk.Scrollbar(frame, orient="vertical", command=table.yview)
+        horizontal = ttk.Scrollbar(frame, orient="horizontal", command=table.xview)
+        table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        table.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        return table
 
     @staticmethod
     def _configure_style():
@@ -567,6 +769,10 @@ class WatermarkApp:
                 self.images["extracted"] is not None
                 and not self.preview_only
             ),
+            "evaluate": (
+                self.images["cover"] is not None
+                and self.images["watermark"] is not None
+            ),
         }
 
         for name, button in self.buttons.items():
@@ -598,6 +804,89 @@ class WatermarkApp:
         self.previews[name].set_image(array)
 
     @staticmethod
+    def _haar_details(image):
+        values = image[:512, :512].astype(np.float64)
+        if values.ndim == 3:
+            values = np.sum(
+                values * np.array([0.299, 0.587, 0.114]), axis=2
+            )
+        height = values.shape[0] // 2 * 2
+        width = values.shape[1] // 2 * 2
+        a = values[:height:2, :width:2]
+        b = values[:height:2, 1:width:2]
+        c = values[1:height:2, :width:2]
+        d = values[1:height:2, 1:width:2]
+        return (a - b + c - d) / 2, (a + b - c - d) / 2
+
+    def _refresh_evidence(self):
+        if not self.metric_values:
+            return
+        original = self.preview_cover if self.preview_only else self.images["cover"]
+        stages = {
+            "source": self.images["cover"],
+            "input": self.images["watermark"],
+            "gray": self.images["prepared"],
+            "haar": None,
+            "changed": None,
+            "decoded": (
+                None if self.preview_only and self.preview_cover is None
+                else self.images["extracted"]
+            ),
+        }
+        if original is not None:
+            horizontal, vertical = self._haar_details(original)
+            stages["haar"] = np.minimum(
+                255, 2 * np.hypot(horizontal, vertical)
+            ).astype(np.uint8)
+            marked = self.images["watermarked"]
+            if marked is not None and marked.shape == original.shape:
+                changed_horizontal, changed_vertical = self._haar_details(marked)
+                stages["changed"] = np.minimum(
+                    255, 4 * np.hypot(
+                        horizontal - changed_horizontal,
+                        vertical - changed_vertical,
+                    )
+                ).astype(np.uint8)
+
+        for name, image in stages.items():
+            self.stage_previews[name].set_image(image)
+
+        values = {
+            "psnr": "Need both images",
+            "ssim": "Need both images",
+            "ber": "Need both marks",
+            "ncc": "Need both marks",
+        }
+        marked = self.images["watermarked"]
+        if original is None and marked is not None:
+            values["psnr"] = "Reference unavailable"
+            values["ssim"] = "Reference unavailable"
+        if original is not None and marked is not None and original.shape == marked.shape:
+            values["psnr"] = f"{WatermarkEngine.psnr(original, marked):.2f} dB"
+            values["ssim"] = f"{WatermarkEngine.ssim(original, marked):.4f}"
+
+        prepared = self.images["prepared"]
+        recovered = (
+            None if self.preview_only and self.preview_cover is None
+            else self.images["extracted"]
+        )
+        if prepared is None and recovered is not None:
+            values["ber"] = "Reference unavailable"
+            values["ncc"] = "Reference unavailable"
+        if prepared is not None and recovered is not None and prepared.shape == recovered.shape:
+            values["ber"] = (
+                f"{100 * WatermarkEngine.bit_error_rate(prepared, recovered):.3f}%"
+            )
+            correlation = WatermarkEngine.normalized_correlation(
+                prepared, recovered
+            )
+            values["ncc"] = (
+                f"{correlation:.5f}" if np.isfinite(correlation) else "Undefined"
+            )
+        for name, value in values.items():
+            self.metric_values[name].configure(text=value)
+
+    @staticmethod
     def _embed_and_extract(cover, watermark, strength, side, mode="balanced"):
         embedded = WatermarkEngine.embed(
             cover, watermark, strength, (side, side), mode=mode
@@ -613,6 +902,67 @@ class WatermarkApp:
         if difference.ndim == 3:
             difference = difference.max(axis=2)
         return np.minimum(255, 4 * difference).astype(np.uint8)
+
+    @staticmethod
+    def _recovery_state(recovered, prepared):
+        if not recovered.verified:
+            return "Checksum failed; approximate"
+        if prepared is None:
+            return "Verified payload CRC; reference unavailable"
+        if np.array_equal(recovered.watermark, prepared):
+            return "Verified exact"
+        return "Verified, pixels differ"
+
+    def _clear_evaluation(self):
+        for table in (self.study_summary, self.study_details):
+            table.delete(*table.get_children())
+        self.study_note.configure(
+            text="No study for this image pair yet."
+        )
+
+    def run_evaluation(self):
+        cover = self.images["cover"]
+        watermark = self.images["watermark"]
+        if self.busy or cover is None or watermark is None:
+            return
+
+        def display(report):
+            for row in report["summary"]:
+                values = list(row)
+                values[4] = f"{100 * values[4]:.1f}%"
+                values[8:10] = [
+                    f"{value:.4f}" if np.isfinite(value) else "N/A"
+                    for value in values[8:10]
+                ]
+                self.study_summary.insert("", "end", values=values)
+            for row in report["details"]:
+                values = list(row)
+                values[5:9] = [
+                    f"{value:.4f}" if np.isfinite(value) else "N/A"
+                    for value in values[5:9]
+                ]
+                self.study_details.insert("", "end", values=values)
+            height, width = report["working_size"]
+            self.study_note.configure(
+                text=(f"Working cover: {width} × {height} px; "
+                      f"{report['skipped']} settings skipped for capacity. "
+                      "Exact rate = verified, pixel-identical prepared "
+                      "watermarks / tested cases. Header, Incomplete and "
+                      "Checksum count distinct failures. N/A means no recovered "
+                      "pixels; mean BER/NCC use only recovered cases. "
+                      "Cover PSNR and 8×8 block luminance SSIM "
+                      "are measured before the listed change.")
+            )
+            self.status.set(
+                f"Study complete: {len(report['details'])} tested cases; "
+                f"{report['skipped']} settings skipped."
+            )
+
+        self._clear_evaluation()
+        self._start(
+            lambda: WatermarkEngine.evaluate_robustness(cover, watermark),
+            display, "Running the robustness study…",
+        )
 
     def _selected_mode(self):
         return self.mode.get().lower()
@@ -652,6 +1002,8 @@ class WatermarkApp:
         if self.busy or self.images["cover"] is None or self.images["watermark"] is None:
             return
         self.preview_only = True
+        self.preview_cover = None
+        self._refresh_evidence()
         self._update_controls()
         if self.preview_job is not None:
             self.root.after_cancel(self.preview_job)
@@ -679,13 +1031,16 @@ class WatermarkApp:
         def completed(result):
             embedded, extracted = result
             self.preview_only = True
+            self.preview_cover = crop
             self.recovery_verified = extracted.verified
+            self.recovery_state = "Live crop preview"
             self.images["watermarked"] = embedded.image
             self.images["extracted"] = extracted.watermark
             self.images["prepared"] = embedded.prepared_watermark
             self.images["difference"] = self._difference(crop, embedded.image)
             for name in ("watermarked", "extracted", "prepared", "difference"):
                 self._show(name, self.images[name])
+            self._refresh_evidence()
             self.status.set(
                 f"Live {self.strength_scale.get()}% crop preview · "
                 f"{embedded.psnr:.2f} dB PSNR. Release to create the full image."
@@ -710,6 +1065,7 @@ class WatermarkApp:
                     self.images["watermark"], (side, side)
                 )
                 self._show("prepared", self.images["prepared"])
+                self._refresh_evidence()
             except ValueError:
                 pass
         if self.images["cover"] is None or self.images["watermark"] is None:
@@ -728,7 +1084,11 @@ class WatermarkApp:
 
     def _display_embedding(self, embedded, extracted):
         self.preview_only = False
+        self.preview_cover = None
         self.recovery_verified = extracted.verified
+        self.recovery_state = self._recovery_state(
+            extracted, embedded.prepared_watermark
+        )
         self.images["watermarked"] = embedded.image
         self.images["extracted"] = extracted.watermark
         self.images["prepared"] = embedded.prepared_watermark
@@ -739,6 +1099,7 @@ class WatermarkApp:
         self._show("extracted", extracted.watermark)
         self._show("prepared", embedded.prepared_watermark)
         self._show("difference", self.images["difference"])
+        self._refresh_evidence()
         self.status.set(
             f"Embedded and extracted a "
             f"{extracted.watermark.shape[1]} × "
@@ -746,7 +1107,7 @@ class WatermarkApp:
             f"Mode: {self.mode.get()}; "
             f"strength: {embedded.strength} ({self.strength_scale.get()}%); "
             f"PSNR: {embedded.psnr:.2f} dB. "
-            "Exact recovery passed. Save the watermarked PNG "
+            f"Recovery: {self.recovery_state}. Save the watermarked PNG "
             "to keep it; JPEG output is not supported because it is lossy."
         )
 
@@ -766,6 +1127,7 @@ class WatermarkApp:
 
         def completed(result):
             cover, watermark, embedded, extracted = result
+            self._clear_evaluation()
             self.strength.set("16")
             self.strength_scale.set(33)
             self.side.set("32")
@@ -883,8 +1245,18 @@ class WatermarkApp:
 
         def completed(result):
             array, recovered, source_size = result
+            self._clear_evaluation()
             self.preview_only = False
+            self.preview_cover = None
             self.recovery_verified = recovered.verified if recovered is not None else False
+            self.recovery_state = (
+                self._recovery_state(recovered, None)
+                if recovered is not None else "Not checked"
+            )
+            if name == "watermarked":
+                for input_name in ("cover", "watermark"):
+                    self.images[input_name] = None
+                    self._show(input_name, None)
             self.images[name] = array
             self._show(name, array)
 
@@ -932,7 +1304,7 @@ class WatermarkApp:
 
             if recovered is not None:
                 recovery_message = (
-                    "Watermark extracted and checked"
+                    "Payload checksum verified; original reference unavailable"
                     if recovered.verified else
                     "Approximate watermark recovered; checksum failed"
                 )
@@ -944,6 +1316,7 @@ class WatermarkApp:
                 )
 
             self.status.set(details)
+            self._refresh_evidence()
 
         self._start(
             operation,
@@ -1001,14 +1374,18 @@ class WatermarkApp:
         def completed(result):
             self.images["extracted"] = result.watermark
             self.recovery_verified = result.verified
+            self.recovery_state = self._recovery_state(
+                result, self.images["prepared"]
+            )
 
             self._show(
                 "extracted",
                 result.watermark,
             )
+            self._refresh_evidence()
 
             recovery_message = (
-                "Extraction passed both checksums."
+                f"Extraction: {self.recovery_state}."
                 if result.verified else
                 "Approximate recovery: payload checksum failed."
             )
@@ -1062,11 +1439,15 @@ class WatermarkApp:
                 if recovered is not None:
                     self.recent_watermarked_path = saved
                     self.images["extracted"] = recovered.watermark
+                    self.recovery_verified = recovered.verified
+                    self.recovery_state = self._recovery_state(
+                        recovered, self.images["prepared"]
+                    )
                     self._show("extracted", recovered.watermark)
                     if recovered.verified:
                         self.status.set(
                             f"Saved {saved}. Reopened the PNG and "
-                            "recovered its watermark exactly."
+                            f"recovered its watermark: {self.recovery_state}."
                         )
                     else:
                         self.status.set(
@@ -1081,6 +1462,7 @@ class WatermarkApp:
                             f"Saved approximate watermark: {saved}. "
                             "The payload checksum failed."
                         )
+                self._refresh_evidence()
 
             self._start(
                 operation,

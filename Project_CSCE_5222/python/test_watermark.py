@@ -46,6 +46,45 @@ class EngineTests(unittest.TestCase):
             blocks,
         )
 
+    def test_evaluation_metrics_have_known_reference_values(self):
+        cover = np.full((8, 8, 3), 100, dtype=np.uint8)
+        self.assertEqual(WatermarkEngine.ssim(cover, cover), 1.0)
+        self.assertEqual(WatermarkEngine.psnr(cover, cover), float("inf"))
+        changed = np.full((8, 8, 3), 110, dtype=np.uint8)
+        self.assertAlmostEqual(
+            WatermarkEngine.psnr(cover, changed),
+            20 * np.log10(255 / 10),
+        )
+        self.assertLess(WatermarkEngine.ssim(cover, changed), 1.0)
+        original = np.array([[1, 0]], dtype=np.uint8)
+        recovered = np.array([[1, 1]], dtype=np.uint8)
+        self.assertAlmostEqual(
+            WatermarkEngine.bit_error_rate(original, recovered), 1 / 16
+        )
+        self.assertAlmostEqual(
+            WatermarkEngine.normalized_correlation(original, recovered),
+            1 / np.sqrt(2),
+        )
+        self.assertTrue(np.isnan(WatermarkEngine.normalized_correlation(
+            np.zeros((1, 2), dtype=np.uint8), recovered
+        )))
+
+    def test_robustness_study_reports_exact_and_unreadable_cases(self):
+        cover = np.full((192, 192), 128, dtype=np.uint8)
+        watermark = np.arange(256, dtype=np.uint8).reshape(16, 16)
+        report = WatermarkEngine.evaluate_robustness(cover, watermark)
+        self.assertEqual(len(report["details"]), 72)
+        self.assertEqual(len(report["summary"]), 24)
+        self.assertEqual(report["skipped"], 18)
+        unchanged = [
+            row for row in report["details"]
+            if row[3] == "Unchanged PNG"
+        ]
+        self.assertTrue(all(row[4] == "Verified exact" for row in unchanged))
+        self.assertTrue(all(row[7] == 0 for row in unchanged))
+        self.assertTrue(all(row[2] == 16 for row in report["details"]))
+        self.assertTrue(all(0 <= row[4] <= 1 for row in report["summary"]))
+
     def test_improved_modes_preserve_shape_and_recover_from_channel_damage(self):
         wide_mark = np.full((16, 32), 70, dtype=np.uint8)
         fitted = WatermarkEngine.prepare_watermark(wide_mark, (32, 32))
@@ -104,10 +143,13 @@ class EngineTests(unittest.TestCase):
                 (500, 500), Image.Resampling.LANCZOS
             )
         )
+        cropped = embedded[16:-16, 16:-16]
         with self.assertRaises(WatermarkError):
             WatermarkEngine.extract(jpeg_image)
         with self.assertRaises(WatermarkError):
             WatermarkEngine.extract(resized)
+        with self.assertRaises(WatermarkError):
+            WatermarkEngine.extract(cropped)
 
     def test_durable_mode_marks_uncorrectable_payload_as_approximate(self):
         cover = np.full((512, 512), 128, np.uint8)
@@ -792,15 +834,24 @@ class ExampleGalleryTests(unittest.TestCase):
 
 
 class GuiTests(unittest.TestCase):
-    def setUp(self):
+    @classmethod
+    def setUpClass(cls):
         try:
-            self.root = tk.Tk()
+            cls.master = tk.Tk()
 
         except tk.TclError as error:
-            self.skipTest(
+            raise unittest.SkipTest(
                 f"A graphical display is required: {error}"
-            )
+            ) from error
 
+        cls.master.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.master.destroy()
+
+    def setUp(self):
+        self.root = self.master
         self.root.withdraw()
         self.app = WatermarkApp(self.root)
 
@@ -814,7 +865,8 @@ class GuiTests(unittest.TestCase):
                 cancel_futures=True,
             )
 
-            self.root.destroy()
+            for child in self.root.winfo_children():
+                child.destroy()
             self.folder.cleanup()
             self.app = None
             self.root = None
@@ -877,8 +929,16 @@ class GuiTests(unittest.TestCase):
             self.app.embed()
             self.finish()
 
+            self.assertEqual(self.app.metric_values["ber"]["text"], "0.000%")
+            self.assertEqual(self.app.metric_values["ncc"]["text"], "1.00000")
+            self.assertIn("dB", self.app.metric_values["psnr"]["text"])
+            self.assertNotEqual(
+                self.app.metric_values["ssim"]["text"],
+                "Need both images",
+            )
+
             self.assertIn(
-                "passed",
+                "Verified exact",
                 self.app.status.get(),
             )
 
@@ -922,6 +982,15 @@ class GuiTests(unittest.TestCase):
                 self.app.images["extracted"], mark
             )
 
+            self.assertEqual(
+                self.app.metric_values["psnr"]["text"],
+                "Reference unavailable",
+            )
+            self.assertEqual(
+                self.app.metric_values["ber"]["text"],
+                "Reference unavailable",
+            )
+
             self.app.extract()
             self.finish()
 
@@ -940,6 +1009,9 @@ class GuiTests(unittest.TestCase):
         self.app._show("cover", cover)
         self.app._show("watermark", mark)
         self.app._strength_drag("75")
+        self.assertEqual(
+            self.app.metric_values["ber"]["text"], "Need both marks"
+        )
         deadline = time.monotonic() + 5
         while self.app.preview_job is not None and time.monotonic() < deadline:
             self.root.update()
@@ -947,6 +1019,7 @@ class GuiTests(unittest.TestCase):
         self.finish()
         self.assertTrue(self.app.preview_only)
         self.assertEqual(self.app.images["watermarked"].shape[:2], (640, 640))
+        self.assertEqual(self.app.metric_values["ber"]["text"], "0.000%")
         self.assertEqual(str(self.app.buttons["save_image"]["state"]), "disabled")
         self.app._strength_release(None)
         self.finish()
@@ -971,7 +1044,7 @@ class GuiTests(unittest.TestCase):
             np.testing.assert_array_equal(
                 self.app.images["extracted"], expected
             )
-            self.assertIn("passed", self.app.status.get())
+            self.assertIn("Verified exact", self.app.status.get())
             first_cover = self.app.current_example["cover_path"]
             self.app.try_sample()
             self.finish()
@@ -1009,10 +1082,24 @@ class GuiTests(unittest.TestCase):
                 self.finish()
                 seen.add(self.app.current_example["cover_path"])
                 self.assertTrue(self.app.recovery_verified)
-                self.assertIn("passed", self.app.status.get())
+                self.assertIn("Verified exact", self.app.status.get())
 
         self.assertEqual(len(seen), len(self.app.example_gallery.entries))
         error.assert_not_called()
+
+    def test_evaluation_tables_use_the_selected_image_pair(self):
+        self.app.images["cover"] = np.full((192, 192), 128, dtype=np.uint8)
+        self.app.images["watermark"] = np.arange(
+            256, dtype=np.uint8
+        ).reshape(16, 16)
+        self.app._update_controls()
+        self.app.run_evaluation()
+        self.finish()
+        self.assertEqual(len(self.app.study_summary.get_children()), 24)
+        self.assertEqual(len(self.app.study_details.get_children()), 72)
+        self.assertIn("18 settings skipped", self.app.study_note["text"])
+        self.app._clear_evaluation()
+        self.assertEqual(len(self.app.study_details.get_children()), 0)
 
     def test_preview_resizing_keeps_status_visible(self):
         self.root.deiconify()

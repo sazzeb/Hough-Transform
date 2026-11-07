@@ -1,10 +1,12 @@
 from dataclasses import dataclass
+import io
 import math
 import struct
 import zlib
 
 import numpy as np
 from numpy.typing import NDArray
+from PIL import Image
 
 ImageArray = NDArray[np.uint8]
 
@@ -403,18 +405,212 @@ class WatermarkEngine:
                 "PSNR requires images with identical shapes."
             )
 
-        difference = (
-            original.astype(np.float64)
-            - modified.astype(np.float64)
-        )
-
-        mse = float(np.mean(difference * difference))
+        difference = np.subtract(original, modified, dtype=np.int16)
+        mse = float(np.mean(np.square(difference, dtype=np.int32)))
 
         return (
             math.inf
             if mse == 0
             else 10 * math.log10(255 ** 2 / mse)
         )
+
+    @staticmethod
+    def ssim(original: ImageArray, modified: ImageArray) -> float:
+        """Mean luminance SSIM over nonoverlapping 8-by-8 blocks."""
+        WatermarkEngine.validate_image(original)
+        WatermarkEngine.validate_image(modified)
+        if original.shape != modified.shape:
+            raise WatermarkError("SSIM requires images with identical shapes.")
+
+        def luminance(image: ImageArray) -> NDArray[np.float32]:
+            if image.ndim == 2:
+                return image.astype(np.float32)
+            values = image[:, :, 0].astype(np.float32) * np.float32(0.299)
+            values += image[:, :, 1].astype(np.float32) * np.float32(0.587)
+            values += image[:, :, 2].astype(np.float32) * np.float32(0.114)
+            return values
+
+        first = luminance(original)
+        second = luminance(modified)
+        height = first.shape[0] // 8 * 8
+        width = first.shape[1] // 8 * 8
+        if not height or not width:
+            raise WatermarkError("SSIM needs at least 8-by-8 pixels.")
+        first = first[:height, :width].reshape(height // 8, 8, width // 8, 8)
+        second = second[:height, :width].reshape(height // 8, 8, width // 8, 8)
+        mean_first = first.mean(axis=(1, 3), dtype=np.float64)
+        mean_second = second.mean(axis=(1, 3), dtype=np.float64)
+        variance_first = (first * first).mean(
+            axis=(1, 3), dtype=np.float64
+        ) - mean_first**2
+        variance_second = (second * second).mean(
+            axis=(1, 3), dtype=np.float64
+        ) - mean_second**2
+        covariance = (first * second).mean(
+            axis=(1, 3), dtype=np.float64
+        ) - mean_first * mean_second
+        c1 = (0.01 * 255) ** 2
+        c2 = (0.03 * 255) ** 2
+        blocks = (
+            (2 * mean_first * mean_second + c1) * (2 * covariance + c2)
+            / ((mean_first**2 + mean_second**2 + c1)
+               * (variance_first + variance_second + c2))
+        )
+        return float(blocks.mean())
+
+    @staticmethod
+    def bit_error_rate(original: ImageArray, recovered: ImageArray) -> float:
+        """Fraction of unequal bits across all eight bits of each pixel."""
+        WatermarkEngine.validate_image(original)
+        WatermarkEngine.validate_image(recovered)
+        if original.shape != recovered.shape:
+            raise WatermarkError("BER requires watermarks with identical shapes.")
+        return float(np.unpackbits(np.bitwise_xor(original, recovered)).mean())
+
+    @staticmethod
+    def normalized_correlation(
+        original: ImageArray, recovered: ImageArray
+    ) -> float:
+        """Uncentered normalized correlation of matching watermark pixels."""
+        WatermarkEngine.validate_image(original)
+        WatermarkEngine.validate_image(recovered)
+        if original.shape != recovered.shape:
+            raise WatermarkError("NCC requires watermarks with identical shapes.")
+        first = original.astype(np.float64).ravel()
+        second = recovered.astype(np.float64).ravel()
+        denominator = math.sqrt(float(first @ first) * float(second @ second))
+        return float(first @ second) / denominator if denominator else math.nan
+
+    @staticmethod
+    def _study_change(image: ImageArray, change: str) -> ImageArray:
+        if change == "Unchanged PNG":
+            output = io.BytesIO()
+            Image.fromarray(image).save(output, format="PNG")
+            output.seek(0)
+            with Image.open(output) as decoded:
+                return np.asarray(decoded).copy()
+        picture = Image.fromarray(image)
+        if change.startswith("JPEG "):
+            output = io.BytesIO()
+            picture.save(output, format="JPEG", quality=int(change.split()[1]))
+            output.seek(0)
+            with Image.open(output) as decoded:
+                return np.asarray(decoded).copy()
+        if change.startswith("Crop "):
+            fraction = 0.05 if "5%" in change else 0.10
+            rows = int(fraction * image.shape[0])
+            columns = int(fraction * image.shape[1])
+            return image[
+                rows:image.shape[0] - rows,
+                columns:image.shape[1] - columns,
+            ].copy()
+        factor = 0.75 if "75%" in change else 0.5
+        size = (
+            max(1, round(image.shape[1] * factor)),
+            max(1, round(image.shape[0] * factor)),
+        )
+        return np.asarray(picture.resize(size, Image.Resampling.BILINEAR)).copy()
+
+    @staticmethod
+    def evaluate_robustness(
+        cover: ImageArray, watermark: ImageArray
+    ) -> dict:
+        """Measure exact recovery across fixed settings and image changes."""
+        WatermarkEngine.validate_image(cover)
+        WatermarkEngine.validate_image(watermark)
+        scale = min(1.0, 512 / max(cover.shape[:2]))
+        working = cover
+        if scale < 1:
+            size = (
+                max(1, round(cover.shape[1] * scale)),
+                max(1, round(cover.shape[0] * scale)),
+            )
+            working = np.asarray(
+                Image.fromarray(cover).resize(size, Image.Resampling.BILINEAR)
+            ).copy()
+        modes = ("classic", "balanced", "durable")
+        changes = (
+            "Unchanged PNG", "JPEG 95", "JPEG 75", "JPEG 50",
+            "Crop 5% each edge", "Crop 10% each edge",
+            "Resize 75%", "Resize 50%",
+        )
+        details = []
+        skipped = 0
+        for mode in modes:
+            capacity = WatermarkEngine.capacity_bytes(working, mode)
+            for strength in (8, 16, 32):
+                for side in (16, 32, 64):
+                    if side * side > capacity:
+                        skipped += 1
+                        continue
+                    embedded = WatermarkEngine.embed(
+                        working, watermark, strength, (side, side), mode
+                    )
+                    quality = WatermarkEngine.psnr(working, embedded.image)
+                    structure = WatermarkEngine.ssim(working, embedded.image)
+                    for change in changes:
+                        altered = WatermarkEngine._study_change(
+                            embedded.image, change
+                        )
+                        state = "Header unreadable"
+                        bit_rate = math.nan
+                        correlation = math.nan
+                        try:
+                            recovered = WatermarkEngine.extract(altered)
+                        except WatermarkError as error:
+                            message = str(error).lower()
+                            if "checksum failed" in message:
+                                state = "Payload checksum failed"
+                            elif "incomplete" in message:
+                                state = "Incomplete payload"
+                            elif "header" not in message and "format" not in message:
+                                raise
+                        else:
+                            if recovered.watermark.shape == embedded.prepared_watermark.shape:
+                                bit_rate = WatermarkEngine.bit_error_rate(
+                                    embedded.prepared_watermark, recovered.watermark
+                                )
+                                correlation = WatermarkEngine.normalized_correlation(
+                                    embedded.prepared_watermark, recovered.watermark
+                                )
+                            if recovered.verified and bit_rate == 0:
+                                state = "Verified exact"
+                            elif recovered.verified:
+                                state = "Verified, pixels differ"
+                            else:
+                                state = "Checksum failed; approximate"
+                        details.append((
+                            mode, strength, side, change, state,
+                            quality, structure, bit_rate, correlation,
+                        ))
+
+        summary = []
+        for mode in modes:
+            for change in changes:
+                rows = [
+                    row for row in details
+                    if row[0] == mode and row[3] == change
+                ]
+                if not rows:
+                    continue
+                exact = sum(row[4] == "Verified exact" for row in rows)
+                unreadable = sum(row[4] == "Header unreadable" for row in rows)
+                incomplete = sum(row[4] == "Incomplete payload" for row in rows)
+                checksum = sum("checksum failed" in row[4].lower() for row in rows)
+                bit_rates = [row[7] for row in rows if math.isfinite(row[7])]
+                correlations = [row[8] for row in rows if math.isfinite(row[8])]
+                summary.append((
+                    mode, change, exact, len(rows), exact / len(rows),
+                    unreadable, incomplete, checksum,
+                    sum(bit_rates) / len(bit_rates) if bit_rates else math.nan,
+                    sum(correlations) / len(correlations) if correlations else math.nan,
+                ))
+        return {
+            "details": details,
+            "summary": summary,
+            "working_size": working.shape[:2],
+            "skipped": skipped,
+        }
 
     @staticmethod
     def embed(

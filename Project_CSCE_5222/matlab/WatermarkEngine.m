@@ -113,6 +113,219 @@ classdef WatermarkEngine
             end
         end
 
+        function score = ssim(original, modified)
+            %SSIM Mean structural similarity over nonoverlapping 8x8 blocks.
+            WatermarkEngine.validateImage(original);
+            WatermarkEngine.validateImage(modified);
+            if ~isequal(size(original), size(modified))
+                error('Watermark:Shape', ...
+                    'SSIM requires images with identical shapes.');
+            end
+            first = double(original);
+            second = double(modified);
+            if ndims(first) == 3
+                weights = reshape([0.299 0.587 0.114], 1, 1, 3);
+                first = sum(first .* weights, 3);
+                second = sum(second .* weights, 3);
+            end
+            height = 8 * floor(size(first, 1) / 8);
+            width = 8 * floor(size(first, 2) / 8);
+            if height == 0 || width == 0
+                error('Watermark:Shape', 'SSIM needs at least 8x8 pixels.');
+            end
+            first = reshape(first(1:height, 1:width), ...
+                8, height/8, 8, width/8);
+            second = reshape(second(1:height, 1:width), ...
+                8, height/8, 8, width/8);
+            average = @(data) mean(mean(data, 1), 3);
+            meanFirst = average(first);
+            meanSecond = average(second);
+            varianceFirst = average(first.^2) - meanFirst.^2;
+            varianceSecond = average(second.^2) - meanSecond.^2;
+            covariance = average(first.*second) - ...
+                meanFirst.*meanSecond;
+            c1 = (0.01 * 255)^2;
+            c2 = (0.03 * 255)^2;
+            blocks = ((2*meanFirst.*meanSecond+c1) .* ...
+                (2*covariance+c2)) ./ ...
+                ((meanFirst.^2+meanSecond.^2+c1) .* ...
+                (varianceFirst+varianceSecond+c2));
+            score = mean(blocks(:));
+        end
+
+        function rate = bitErrorRate(original, recovered)
+            WatermarkEngine.validateImage(original);
+            WatermarkEngine.validateImage(recovered);
+            if ~isequal(size(original), size(recovered))
+                error('Watermark:Shape', ...
+                    'BER requires watermarks with identical shapes.');
+            end
+            changed = bitxor(original(:), recovered(:));
+            bitErrors = 0;
+            for bit = 1:8
+                bitErrors = bitErrors + sum(bitget(changed, bit));
+            end
+            rate = double(bitErrors) / (8 * numel(changed));
+        end
+
+        function score = normalizedCorrelation(original, recovered)
+            WatermarkEngine.validateImage(original);
+            WatermarkEngine.validateImage(recovered);
+            if ~isequal(size(original), size(recovered))
+                error('Watermark:Shape', ...
+                    'NCC requires watermarks with identical shapes.');
+            end
+            first = double(original(:));
+            second = double(recovered(:));
+            denominator = sqrt(sum(first.^2) * sum(second.^2));
+            score = NaN;
+            if denominator > 0
+                score = sum(first.*second) / denominator;
+            end
+        end
+
+        function report = evaluateRobustness(cover, watermark, progress)
+            %EVALUATEROBUSTNESS Compare recovery under specified changes.
+            % The cover is fitted within 512 pixels to bound study runtime.
+            if nargin < 3
+                progress = [];
+            end
+            WatermarkEngine.validateImage(cover);
+            WatermarkEngine.validateImage(watermark);
+            scale = min(1, 512/max(size(cover, 1), size(cover, 2)));
+            if scale < 1
+                workingCover = imresize(cover, scale, 'bilinear');
+            else
+                workingCover = cover;
+            end
+
+            modes = {'classic', 'balanced', 'durable'};
+            strengths = [8 16 32];
+            sides = [16 32 64];
+            changes = {'Unchanged PNG', 'JPEG 95', 'JPEG 75', ...
+                'JPEG 50', 'Crop 5% each edge', ...
+                'Crop 10% each edge', 'Resize 75%', 'Resize 50%'};
+            skipped = 0;
+            configuration = 0;
+            totalConfigurations = numel(modes)*numel(strengths)*numel(sides);
+            details = cell(totalConfigurations*numel(changes), 9);
+            detailCount = 0;
+
+            for modeIndex = 1:numel(modes)
+                mode = modes{modeIndex};
+                capacity = WatermarkEngine.capacityBytes( ...
+                    workingCover, mode);
+                for strength = strengths
+                    for side = sides
+                        configuration = configuration + 1;
+                        if ~isempty(progress)
+                            progress(configuration, totalConfigurations);
+                        end
+                        if side^2 > capacity
+                            skipped = skipped + 1;
+                            continue;
+                        end
+                        embedded = WatermarkEngine.embed( ...
+                            workingCover, watermark, strength, ...
+                            [side side], mode);
+                        quality = WatermarkEngine.psnr( ...
+                            workingCover, embedded.image);
+                        structure = WatermarkEngine.ssim( ...
+                            workingCover, embedded.image);
+                        for changeIndex = 1:numel(changes)
+                            changed = WatermarkEngine.applyStudyChange( ...
+                                embedded.image, changeIndex);
+                            bitRate = NaN;
+                            correlation = NaN;
+                            try
+                                recovered = WatermarkEngine.extract(changed);
+                                if isequal(size(recovered.watermark), ...
+                                        size(embedded.preparedWatermark))
+                                    bitRate = WatermarkEngine.bitErrorRate( ...
+                                        embedded.preparedWatermark, ...
+                                        recovered.watermark);
+                                    correlation = ...
+                                        WatermarkEngine.normalizedCorrelation( ...
+                                        embedded.preparedWatermark, ...
+                                        recovered.watermark);
+                                end
+                                if recovered.verified && bitRate == 0
+                                    state = 'Verified exact';
+                                elseif recovered.verified
+                                    state = 'Verified, pixels differ';
+                                else
+                                    state = 'Checksum failed; approximate';
+                                end
+                            catch exception
+                                if strcmp(exception.identifier, ...
+                                        'Watermark:Checksum')
+                                    state = 'Payload checksum failed';
+                                elseif any(strcmp(exception.identifier, ...
+                                        {'Watermark:Header', ...
+                                        'Watermark:Format'}))
+                                    state = 'Header unreadable';
+                                elseif strcmp(exception.identifier, ...
+                                        'Watermark:Incomplete')
+                                    state = 'Incomplete payload';
+                                else
+                                    rethrow(exception);
+                                end
+                            end
+                            detailCount = detailCount + 1;
+                            details(detailCount, :) = {mode, strength, side, ...
+                                changes{changeIndex}, state, ...
+                                quality, structure, bitRate, correlation};
+                        end
+                    end
+                end
+            end
+
+            details = details(1:detailCount, :);
+            summary = cell(numel(modes)*numel(changes), 10);
+            summaryCount = 0;
+            for modeIndex = 1:numel(modes)
+                for changeIndex = 1:numel(changes)
+                    selected = strcmp(details(:, 1), modes{modeIndex}) & ...
+                        strcmp(details(:, 4), changes{changeIndex});
+                    rows = details(selected, :);
+                    if isempty(rows)
+                        continue;
+                    end
+                    states = rows(:, 5);
+                    exactCount = sum(strcmp(states, 'Verified exact'));
+                    unreadableCount = sum(strcmp( ...
+                        states, 'Header unreadable'));
+                    incompleteCount = sum(strcmp( ...
+                        states, 'Incomplete payload'));
+                    failedCount = sum(contains(states, 'checksum failed', ...
+                        'IgnoreCase', true));
+                    bitRates = cell2mat(rows(:, 8));
+                    correlations = cell2mat(rows(:, 9));
+                    validBits = bitRates(isfinite(bitRates));
+                    validCorrelations = correlations( ...
+                        isfinite(correlations));
+                    meanBitRate = NaN;
+                    meanCorrelation = NaN;
+                    if ~isempty(validBits)
+                        meanBitRate = mean(validBits);
+                    end
+                    if ~isempty(validCorrelations)
+                        meanCorrelation = mean(validCorrelations);
+                    end
+                    summaryCount = summaryCount + 1;
+                    summary(summaryCount, :) = {modes{modeIndex}, ...
+                        changes{changeIndex}, exactCount, size(rows, 1), ...
+                        exactCount/size(rows, 1), unreadableCount, ...
+                        incompleteCount, failedCount, ...
+                        meanBitRate, meanCorrelation};
+                end
+            end
+            summary = summary(1:summaryCount, :);
+            report = struct('details', {details}, 'summary', {summary}, ...
+                'workingSize', size(workingCover), ...
+                'skippedConfigurations', skipped);
+        end
+
         function result = embed(cover, watermark, strength, targetSize, mode)
             if nargin < 3
                 strength = 16;
@@ -337,6 +550,46 @@ classdef WatermarkEngine
     end
 
     methods (Static, Access = private)
+        function changed = applyStudyChange(imageData, changeIndex)
+            switch changeIndex
+                case 1
+                    filename = [tempname '.png'];
+                    cleanup = onCleanup( ...
+                        @()WatermarkEngine.deleteStudyFile(filename));
+                    imwrite(imageData, filename, 'png');
+                    changed = imread(filename);
+                case {2, 3, 4}
+                    qualities = [95 75 50];
+                    filename = [tempname '.jpg'];
+                    cleanup = onCleanup( ...
+                        @()WatermarkEngine.deleteStudyFile(filename));
+                    imwrite(imageData, filename, 'jpg', ...
+                        'Quality', qualities(changeIndex-1));
+                    changed = imread(filename);
+                case {5, 6}
+                    fractions = [0.05 0.10];
+                    amount = fractions(changeIndex-4);
+                    trimRows = floor(amount*size(imageData, 1));
+                    trimColumns = floor(amount*size(imageData, 2));
+                    changed = imageData( ...
+                        trimRows+1:end-trimRows, ...
+                        trimColumns+1:end-trimColumns, :);
+                case {7, 8}
+                    factors = [0.75 0.5];
+                    changed = imresize(imageData, ...
+                        factors(changeIndex-6), 'bilinear');
+                otherwise
+                    error('Watermark:Option', ...
+                        'Unknown robustness study change.');
+            end
+        end
+
+        function deleteStudyFile(filename)
+            if isfile(filename)
+                delete(filename);
+            end
+        end
+
         function result = embedImproved(cover, prepared, strength, mode)
             repeats = 3;
             flags = 3;
