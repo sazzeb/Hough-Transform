@@ -1,0 +1,106 @@
+function buildPreviewArea(app, workspace)
+    right = uigridlayout(workspace, [7 1]);
+    app.RightLayout = right;
+    right.Layout.Column = 2;
+    right.RowHeight = {78, 27, 1100, 270, 55, 27, 1280};
+    right.RowSpacing = 9;
+    right.Padding = [0 0 0 0];
+    right.Scrollable = 'on';
+    right.BackgroundColor = [1 1 1];
+
+    statuses = uigridlayout(right, [1 3]);
+    statuses.Layout.Row = 1;
+    statuses.ColumnWidth = {'1x', '1x', '1x'};
+    statuses.ColumnSpacing = 10;
+    statuses.Padding = [0 0 0 0];
+    app.addStatusCard(statuses, 1, 'INPUT IMAGES', '0 of 2 ready', ...
+        'inputs');
+    app.addStatusCard(statuses, 2, 'RECOVERY', 'Not checked', ...
+        'verification');
+    app.addStatusCard(statuses, 3, 'SAVED RESULT', 'Not saved', ...
+        'saved');
+
+    stageHeading = uilabel(right, ...
+        'Text', '01  IMAGE → PREPARATION → HAAR DETAILS → RECOVERY', ...
+        'FontSize', 12, 'FontWeight', 'bold', ...
+        'FontColor', [38 100 53]/255);
+    stageHeading.Layout.Row = 2;
+
+    stages = uigridlayout(right, [3 2]);
+    stages.Layout.Row = 3;
+    stages.RowHeight = {360, 360, 360};
+    stages.ColumnWidth = {'1x', '1x'};
+    stages.RowSpacing = 10;
+    stages.ColumnSpacing = 8;
+    stages.Padding = [0 0 0 0];
+    stages.BackgroundColor = [1 1 1];
+    app.addStage(stages, 'source', '1  Original', ...
+        'Cover image', 1);
+    app.addStage(stages, 'input', '2  Image to hide', ...
+        'Selected watermark', 2);
+    app.addStage(stages, 'gray', '3  Prepared', ...
+        'Grayscale + fit', 3);
+    app.addStage(stages, 'haar', '4  Haar details', ...
+        'First 512 × 512 pixels · magnitude ×2 for display', 4);
+    app.addStage(stages, 'changed', '5  Embedded detail', ...
+        'First 512 × 512 pixels · change ×4 for display', 5);
+    app.addStage(stages, 'decoded', '6  Decoded', ...
+        'Recovered bytes', 6);
+
+    metrics = uigridlayout(right, [2 2]);
+    metrics.Layout.Row = 4;
+    metrics.RowHeight = {'1x', '1x'};
+    metrics.ColumnWidth = {'1x', '1x'};
+    metrics.RowSpacing = 8;
+    metrics.ColumnSpacing = 8;
+    metrics.Padding = [0 0 0 0];
+    metrics.BackgroundColor = [1 1 1];
+    app.addMetric(metrics, 1, 'psnr', 'COVER QUALITY · PSNR', ...
+        'Original cover → watermarked | 10log10(255²/MSE)');
+    app.addMetric(metrics, 2, 'ssim', 'COVER QUALITY · SSIM', ...
+        'Original cover → watermarked | 8×8 block luminance variant');
+    app.addMetric(metrics, 3, 'ber', 'RECOVERY · BER', ...
+        'Prepared grayscale → recovered | wrong bits / all bits');
+    app.addMetric(metrics, 4, 'ncc', 'RECOVERY · NCC', ...
+        'Prepared grayscale → recovered | normalized dot product');
+
+    evidenceNote = uilabel(right, ...
+        'Text', ['Scores evaluate outputs; they do not create ' ...
+            'the watermark. No universal pass threshold applies. ' ...
+            'The Haar map shows only the first 512 × 512 ' ...
+            'pixels at 2× and coefficient changes at 4× ' ...
+            'for visualization. See Evaluate for measured ' ...
+            'recovery under specified changes.'], ...
+        'FontSize', 10, 'WordWrap', 'on', ...
+        'FontColor', [0 0 0]);
+    evidenceNote.Layout.Row = 5;
+
+    resultHeading = uilabel(right, ...
+        'Text', '02  RESULT IMAGES  •  Compare the true pixels below', ...
+        'FontSize', 12, 'FontWeight', 'bold', ...
+        'FontColor', [38 100 53]/255);
+    resultHeading.Layout.Row = 6;
+
+    previews = uigridlayout(right, [3 2]);
+    app.PreviewGrid = previews;
+    previews.Layout.Row = 7;
+    previews.RowHeight = {420, 420, 420};
+    previews.ColumnWidth = {'1x', '1x'};
+    previews.RowSpacing = 10;
+    previews.ColumnSpacing = 10;
+    previews.Padding = [0 0 0 0];
+    previews.BackgroundColor = [1 1 1];
+
+    app.addPreview(previews, 'cover', 'Original image', 1, 1);
+    app.addPreview(previews, 'watermark', ...
+        'Image to hide', 1, 2);
+    app.addPreview(previews, 'prepared', ...
+        'Prepared grayscale image', 2, 1);
+    app.addPreview(previews, 'watermarked', ...
+        'Watermarked image', 2, 2);
+    app.addPreview(previews, 'extracted', ...
+        'Recovered watermark', 3, 1);
+    app.addPreview(previews, 'comparison', ...
+        'Compare images', 3, 2);
+    app.refreshEvidence();
+end

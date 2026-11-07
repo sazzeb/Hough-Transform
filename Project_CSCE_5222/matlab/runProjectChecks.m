@@ -3,17 +3,19 @@ function runProjectChecks()
     projectFolder = fileparts(mfilename('fullpath'));
     testWatermarkProject();
 
-    sourceFiles = dir(fullfile(projectFolder, '*.m'));
+    sourceFiles = dir(fullfile(projectFolder, '**', '*.m'));
     totalFindings = 0;
 
     for fileIndex = 1:numel(sourceFiles)
         filename = sourceFiles(fileIndex).name;
+        sourcePath = fullfile(sourceFiles(fileIndex).folder, filename);
         findings = checkcode( ...
-            fullfile(projectFolder, filename), '-struct');
+            sourcePath, '-struct');
 
         for findingIndex = 1:numel(findings)
             fprintf('%s:%d: %s\n', ...
-                filename, findings(findingIndex).line, ...
+                erase(sourcePath, [projectFolder filesep]), ...
+                findings(findingIndex).line, ...
                 findings(findingIndex).message);
         end
 

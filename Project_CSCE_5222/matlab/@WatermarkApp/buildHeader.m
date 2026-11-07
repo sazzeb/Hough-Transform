@@ -1,0 +1,23 @@
+function buildHeader(~, page)
+    header = uipanel(page, 'BorderType', 'none', ...
+        'BackgroundColor', [38 100 53]/255);
+    header.Layout.Row = 1;
+
+    layout = uigridlayout(header, [2 1]);
+    layout.RowHeight = {22, 40};
+    layout.Padding = [28 12 28 12];
+    layout.RowSpacing = 2;
+    layout.BackgroundColor = [38 100 53]/255;
+
+    eyebrow = uilabel(layout, ...
+        'Text', 'IMAGE LAB  /  WAVELET WATERMARKING', ...
+        'FontSize', 11, 'FontWeight', 'bold', ...
+        'FontColor', [1 1 1]);
+    eyebrow.Layout.Row = 1;
+
+    title = uilabel(layout, ...
+        'Text', 'Hide an image. Recover it. See every step.', ...
+        'FontSize', 23, 'FontWeight', 'bold', ...
+        'FontColor', [1 1 1]);
+    title.Layout.Row = 2;
+end
