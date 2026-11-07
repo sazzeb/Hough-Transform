@@ -1,4 +1,5 @@
 function result = extract(imageData)
+    % Read the stored watermark and check its data.
     WatermarkEngine.validateImage(imageData);
 
     split = WatermarkEngine.HEADER_SLOTS;
@@ -14,6 +15,7 @@ function result = extract(imageData)
     if ndims(imageData) == 3
         channelCount = 3;
     end
+    % Read the header first to learn how much data to recover.
     headerCopies = zeros( ...
         channelCount, WatermarkEngine.HEADER_BYTES, 'uint8');
     for channel = 1:channelCount
@@ -70,6 +72,7 @@ function result = extract(imageData)
              'image dimensions may have changed.']);
     end
 
+    % Recover the watermark bytes from the image channels.
     payloadCopies = zeros(channelCount, payloadLength, 'uint8');
     if isImproved
         indices = WatermarkEngine.blockIndices( ...

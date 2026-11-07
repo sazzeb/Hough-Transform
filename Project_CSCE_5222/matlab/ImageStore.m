@@ -1,5 +1,6 @@
 
 classdef ImageStore
+    % Load image files safely and save checked PNG results.
     properties (Constant)
         MaxWorkingPixels = 12000000
         MaxSourcePixels = 100000000
@@ -8,6 +9,7 @@ classdef ImageStore
 
     methods (Static)
         function imageData = read(filename, isWatermarked)
+            % Open an image and convert it to a safe 8-bit working image.
             if nargin < 2
                 isWatermarked = false;
             end
@@ -171,6 +173,7 @@ classdef ImageStore
         end
 
         function saved = savePng(filename, imageData)
+            % Save a lossless PNG and reopen it to check its pixels.
             if ~(ischar(filename) || ...
                     (isstring(filename) && isscalar(filename)))
                 error('Watermark:File', ...
@@ -222,6 +225,7 @@ classdef ImageStore
 
     methods (Static, Access = private)
         function deleteIfExists(filename)
+            % Remove an unfinished temporary PNG.
             if isfile(filename)
                 delete(filename);
             end

@@ -1,4 +1,5 @@
 function quality = psnr(original, modified)
+    % Measure pixel change between the original and marked images.
     WatermarkEngine.validateImage(original);
     WatermarkEngine.validateImage(modified);
 

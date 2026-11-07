@@ -1,4 +1,5 @@
 function addMetric(app, parent, index, name, title, formula)
+    % Create one card for an image or recovery score.
     card = uipanel(parent, 'BorderType', 'line', ...
         'BackgroundColor', [1 1 1]);
     card.Layout.Row = ceil(index/2);

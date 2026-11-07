@@ -1,5 +1,6 @@
 
 classdef WatermarkEngine
+    % Prepare, embed, extract, and measure image watermarks.
     properties (Constant, Access = private)
         HEADER_BYTES = 24
         HEADER_SLOTS = 576
@@ -9,6 +10,7 @@ classdef WatermarkEngine
 
     methods (Static)
         function validateImage(imageData)
+            % Check for a nonempty 8-bit grayscale or RGB image.
             validShape = ismatrix(imageData) || ...
                 (ndims(imageData) == 3 && size(imageData, 3) == 3);
 
@@ -19,6 +21,7 @@ classdef WatermarkEngine
         end
 
         function prepared = prepareWatermark(imageData, targetSize)
+            % Fit the chosen image into a small grayscale watermark.
             if nargin < 2
                 targetSize = [32 32];
             end
@@ -73,6 +76,7 @@ classdef WatermarkEngine
         end
 
         function capacity = capacityBytes(imageData, mode)
+            % Count how many watermark bytes the cover can hold.
             if nargin < 2
                 mode = 'classic';
             end
@@ -114,6 +118,7 @@ classdef WatermarkEngine
         changed = applyStudyChange(imageData, changeIndex)
 
         function deleteStudyFile(filename)
+            % Remove a temporary image used by a recovery test.
             if isfile(filename)
                 delete(filename);
             end
@@ -122,6 +127,7 @@ classdef WatermarkEngine
         result = embedImproved(cover, prepared, strength, mode)
 
         function indices = blockIndices(imageData, blockCount)
+            % Spread payload blocks across the cover image.
             headerBlocks = WatermarkEngine.HEADER_SLOTS / 2;
             available = floor(size(imageData, 1)/2) * ...
                 floor(size(imageData, 2)/2);
@@ -135,6 +141,7 @@ classdef WatermarkEngine
         end
 
         function blocks = readSelectedBlocks(imageData, indices, channel)
+            % Read the blocks chosen to hold payload bits.
             if ismatrix(imageData)
                 plane = imageData;
             else
@@ -155,6 +162,7 @@ classdef WatermarkEngine
 
         function output = writeSelectedBlocks( ...
                 imageData, indices, blocks, channel)
+            % Write changed blocks back at their chosen positions.
             output = imageData;
             if ismatrix(output)
                 plane = output;
@@ -184,12 +192,14 @@ classdef WatermarkEngine
         end
 
         function strengths = adaptiveStrengths(coefficients, strength)
+            % Pick each block's strength from its image detail.
             quietStrength = max(8, floor(0.75 * strength + 0.5));
             strengths = repmat(strength, 1, size(coefficients, 1));
             strengths(abs(coefficients(:, 4)) < 16) = quietStrength;
         end
 
         function coefficients = stabilizeAdaptiveDetails(coefficients)
+            % Keep the texture choice stable after rounding.
             % Keep the texture decision stable after pixel rounding.
             details = coefficients(:, 4);
             quiet = abs(details) < 16;
@@ -200,6 +210,7 @@ classdef WatermarkEngine
         end
 
         function bytes = mergeCopies(copies)
+            % Vote across image channels to recover damaged bytes.
             if size(copies, 1) == 1
                 bytes = copies;
                 return;
@@ -213,6 +224,7 @@ classdef WatermarkEngine
         end
 
         function bits = makeBitsWithRepeats(bytes, repeats)
+            % Repeat payload bits to help repair small damage.
             bits = zeros(1, numel(bytes)*8);
             for bit = 1:8
                 bits(bit:8:end) = double(bitget(bytes, 9-bit));
@@ -221,6 +233,7 @@ classdef WatermarkEngine
         end
 
         function bytes = bitsToBytes(bits)
+            % Pack recovered bits back into bytes.
             bytes = zeros(1, numel(bits)/8, 'uint8');
             for bit = 1:8
                 bytes = bitor(bytes, ...
@@ -229,6 +242,7 @@ classdef WatermarkEngine
         end
 
         function value = checkInteger(value, minimum, maximum, label)
+            % Check that a setting is a whole number in range.
             if ~isnumeric(value) || ~isreal(value) || ~isscalar(value) || ...
                     ~isfinite(value) || value ~= floor(value) || ...
                     value < minimum || value > maximum
@@ -246,6 +260,7 @@ classdef WatermarkEngine
         output = writeBlocks(imageData, blocks, channel)
 
         function bits = makeBits(bytes)
+            % Turn stored bytes into a stream of bits.
             bits = zeros(1, numel(bytes)*8);
 
             for bit = 1:8
@@ -256,11 +271,13 @@ classdef WatermarkEngine
         end
 
         function changed = quantize(slots, bits, strength)
+            % Move Haar detail values to represent watermark bits.
             changed = strength .* ...
                 (2 * floor((slots./strength-bits)/2 + 0.5) + bits);
         end
 
         function bytes = decodeSlots(slots, byteCount, strength)
+            % Read watermark bytes from Haar detail values.
             bits = mod(floor(slots/strength + 0.5), 2);
 
             votes = reshape( ...
@@ -277,6 +294,7 @@ classdef WatermarkEngine
         end
 
         function bytes = packUnsigned(value, count)
+            % Store a number as big-endian bytes.
             value = uint32(value);
             bytes = zeros(1, count, 'uint8');
 
@@ -287,11 +305,13 @@ classdef WatermarkEngine
         end
 
         function value = unpackUnsigned(bytes)
+            % Read a number from big-endian bytes.
             value = sum( ...
                 double(bytes) .* 256.^(numel(bytes)-1:-1:0));
         end
 
         function checksum = crc32(bytes)
+            % Calculate the checksum used to check stored data.
             persistent table
 
             if isempty(table)

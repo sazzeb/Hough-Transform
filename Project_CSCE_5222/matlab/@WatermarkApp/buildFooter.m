@@ -1,4 +1,5 @@
 function buildFooter(app, page)
+    % Show the app status at the bottom of the window.
     footer = uipanel(page, 'BorderType', 'none', ...
         'BackgroundColor', [0 0 0]);
     footer.Layout.Row = 3;

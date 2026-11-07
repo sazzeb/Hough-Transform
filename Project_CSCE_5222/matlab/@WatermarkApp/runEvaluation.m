@@ -1,4 +1,5 @@
 function runEvaluation(app)
+    % Test recovery after the selected image is changed.
     if isempty(app.Images.cover) || isempty(app.Images.watermark)
         error('Watermark:Input', ...
             'Choose an original image and an image to hide first.');

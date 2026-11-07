@@ -1,4 +1,5 @@
 function buildDetailsTab(app, tab)
+    % Add the page that explains the current result.
     layout = uigridlayout(tab, [6 1]);
     layout.RowHeight = {30, 55, '1x', 38, 38, 40};
     layout.RowSpacing = 8;

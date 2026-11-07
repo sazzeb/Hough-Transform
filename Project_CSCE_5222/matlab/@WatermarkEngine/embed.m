@@ -1,4 +1,5 @@
 function result = embed(cover, watermark, strength, targetSize, mode)
+    % Place the prepared watermark in Haar detail values.
     if nargin < 3
         strength = 16;
     end
@@ -39,6 +40,7 @@ function result = embed(cover, watermark, strength, targetSize, mode)
             numel(payload), capacity);
     end
 
+    % The header records the settings, size, and checksums.
     body = [ ...
         uint8('WVM1'), ...
         uint8([strength 3 1 0]), ...
@@ -68,6 +70,7 @@ function result = embed(cover, watermark, strength, targetSize, mode)
         channelCount = 3;
     end
 
+    % Store the bits in each available image channel.
     for channel = 1:channelCount
         blocks = WatermarkEngine.readBlocks( ...
             cover, usedSlots/2, channel);
@@ -87,6 +90,7 @@ function result = embed(cover, watermark, strength, targetSize, mode)
             output, HaarTransform.inverse(coefficients), channel);
     end
 
+    % Recover the mark once before returning the image.
     checked = WatermarkEngine.extract(output);
 
     if ~isequal(checked.watermark, prepared)

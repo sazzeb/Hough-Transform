@@ -1,5 +1,5 @@
 function watermark = sampleWatermark()
-%SAMPLEWATERMARK Create a small grayscale logo for the one-click example.
+% Make the small grayscale logo used in the sample workflow.
     watermark = repmat(uint8(245), 96, 96);
     watermark(5:92, 5:92) = 232;
     watermark(5:8, 5:92) = 25;

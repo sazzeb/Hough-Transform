@@ -1,4 +1,5 @@
 function addStage(app, parent, name, title, detailText, index)
+    % Create one card for a step in the watermark process.
     card = uipanel(parent, 'BorderType', 'line', ...
         'BackgroundColor', [1 1 1]);
     card.Layout.Row = ceil(index/2);

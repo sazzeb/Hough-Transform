@@ -1,4 +1,5 @@
 function embedImage(app)
+    % Embed the watermark and check that it can be recovered.
     [valid, strength, side, message] = app.settings();
     if ~valid
         error('Watermark:Option', '%s', message);

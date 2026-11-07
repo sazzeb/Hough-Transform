@@ -1,4 +1,5 @@
 function buildWorkspace(app, page)
+    % Put the action tabs beside the image workspace.
     workspace = uigridlayout(page, [1 2]);
     app.WorkspaceLayout = workspace;
     workspace.Layout.Row = 2;

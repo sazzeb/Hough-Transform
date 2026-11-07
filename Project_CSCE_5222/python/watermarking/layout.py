@@ -8,7 +8,9 @@ from .theme import PALETTE
 
 
 class AppLayout:
+    """Build the controls and image panels for the GUI."""
     def _build_interface(self):
+        """Arrange the tabs, settings, scores, and previews."""
         self._configure_style()
 
         header = tk.Frame(self.root, bg=PALETTE["header"])
@@ -396,6 +398,7 @@ class AppLayout:
 
     @staticmethod
     def _study_table(parent, headings, height):
+        """Make a scrollable table for recovery test results."""
         frame = tk.Frame(parent, bg=PALETTE["background"])
         frame.pack(fill="x", pady=(0, 9))
         frame.grid_columnconfigure(0, weight=1)
@@ -415,6 +418,7 @@ class AppLayout:
 
     @staticmethod
     def _configure_style():
+        """Set the app's button, input, and progress colors."""
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(
@@ -462,6 +466,7 @@ class AppLayout:
 
     @staticmethod
     def _section(parent, title):
+        """Add a short heading in the sidebar."""
         tk.Label(
             parent,
             text=title,
@@ -472,6 +477,7 @@ class AppLayout:
         ).pack(fill="x", pady=(12, 5))
 
     def _button(self, parent, name, caption, callback, primary=False):
+        """Add a button and keep it for later state updates."""
         button = ttk.Button(
             parent,
             text=caption,
@@ -483,6 +489,7 @@ class AppLayout:
 
     @staticmethod
     def _setting(parent, caption, variable, minimum, maximum):
+        """Add one labeled number setting."""
         row = tk.Frame(parent, bg=PALETTE["surface"])
         row.pack(fill="x", pady=2)
 

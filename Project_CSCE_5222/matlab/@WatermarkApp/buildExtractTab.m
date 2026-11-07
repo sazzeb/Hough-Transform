@@ -1,4 +1,5 @@
 function buildExtractTab(app, tab)
+    % Add controls for recovering a watermark from a PNG.
     layout = uigridlayout(tab, [8 1]);
     layout.Scrollable = 'on';
     layout.RowHeight = {30, 88, 42, 42, 44, 76, 40, '1x'};

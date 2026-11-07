@@ -1,5 +1,5 @@
 classdef WatermarkApp < handle
-    %WATERMARKAPP Interactive image watermarking and recovery workspace.
+    % Build the GUI for creating and recovering watermarks.
 
     properties (Access = private)
         Window
@@ -48,6 +48,7 @@ classdef WatermarkApp < handle
 
     methods
         function app = WatermarkApp()
+            % Create the window and connect its controls.
             app.Gallery = ExampleGallery();
             app.Window = uifigure( ...
                 'Name', 'Wavelet Watermark Studio', ...
@@ -80,6 +81,7 @@ classdef WatermarkApp < handle
         end
 
         function delete(app)
+            % Close the window when this app is deleted.
             if isgraphics(app.Window)
                 delete(app.Window);
             end
@@ -114,6 +116,7 @@ classdef WatermarkApp < handle
         buildFooter(app, page)
 
         function label = addLabel(~, parent, row, textValue, isHeading)
+            % Add a label and style it as a heading when needed.
             label = uilabel(parent, ...
                 'Text', textValue, ...
                 'WordWrap', 'on', ...
@@ -128,6 +131,7 @@ classdef WatermarkApp < handle
 
         function button = addButton(app, parent, row, name, caption, ...
                 callback, isPrimary)
+            % Add an action button and keep its handle.
             button = uibutton(parent, 'push', ...
                 'Text', caption, ...
                 'ButtonPushedFcn', @(~, ~)callback(), ...
@@ -144,6 +148,7 @@ classdef WatermarkApp < handle
         end
 
         function field = addTextSetting(app, parent, row, caption, value)
+            % Add a labeled field for one setting.
             setting = uigridlayout(parent, [1 2]);
             setting.Layout.Row = row;
             setting.ColumnWidth = {'1x', 66};
@@ -167,6 +172,7 @@ classdef WatermarkApp < handle
         setPreviewScale(app, name, useActualPixels)
 
         function settingsChanged(app)
+            % Update the strength controls after a setting changes.
             app.PresetMenu.Value = 'Custom';
             strength = str2double(app.StrengthField.Value);
             if isfinite(strength) && strength >= 8 && strength <= 32
@@ -183,6 +189,7 @@ classdef WatermarkApp < handle
         end
 
         function applyPreset(app)
+            % Fill in the strength from the chosen preset.
             switch app.PresetMenu.Value
                 case 'Subtle'
                     app.StrengthField.Value = '8';
@@ -204,10 +211,12 @@ classdef WatermarkApp < handle
         end
 
         function mode = selectedMode(app)
+            % Return the selected mode in the format the engine uses.
             mode = lower(app.ModeMenu.Value);
         end
 
         function state = recoveryState(~, recovered, prepared)
+            % Turn checksum and pixel checks into a short status.
             if ~recovered.verified
                 state = 'Checksum failed; approximate';
             elseif isempty(prepared)
@@ -220,6 +229,7 @@ classdef WatermarkApp < handle
         end
 
         function clearEvaluation(app)
+            % Clear study results when the image pair changes.
             app.EvaluationSummary.Data = cell(0, 10);
             app.EvaluationDetails.Data = cell(0, 9);
             app.EvaluationNote.Text = [ ...
@@ -230,12 +240,14 @@ classdef WatermarkApp < handle
         runEvaluation(app)
 
         function updateEvaluationProgress(app, step, total)
+            % Show how far the recovery study has gone.
             app.setStatus(sprintf( ...
                 'Evaluating configuration %d of %d...', step, total));
             drawnow limitrate;
         end
 
         function invalidateResult(app)
+            % Clear results that no longer match the inputs.
             app.PreviewOnly = false;
             app.PreviewCover = [];
             app.Images.watermarked = [];
@@ -255,6 +267,7 @@ classdef WatermarkApp < handle
         end
 
         function embedWhenReady(app)
+            % Create a result when both images and settings are ready.
             [valid, ~, side, ~] = app.settings();
             if valid && ~isempty(app.Images.cover) && ...
                     ~isempty(app.Images.watermark) && ...
@@ -268,6 +281,7 @@ classdef WatermarkApp < handle
         previewStrength(app, percentage)
 
         function finishStrengthChange(app, percentage)
+            % Apply the new strength to the full image.
             app.StrengthSlider.Value = round(percentage);
             app.StrengthField.Value = num2str( ...
                 8 + round(24 * percentage / 100));
@@ -281,6 +295,7 @@ classdef WatermarkApp < handle
         end
 
         function [valid, strength, side, message] = settings(app)
+            % Read and check the strength and watermark size.
             strength = str2double(app.StrengthField.Value);
             side = str2double(app.SizeField.Value);
             valid = isfinite(strength) && strength == floor(strength) && ...
@@ -294,6 +309,7 @@ classdef WatermarkApp < handle
         end
 
         function refreshPrepared(app)
+            % Prepare the chosen watermark for the current size.
             [valid, ~, side, ~] = app.settings();
             app.Images.prepared = [];
             if valid && ~isempty(app.Images.watermark)
@@ -307,6 +323,7 @@ classdef WatermarkApp < handle
         refreshControls(app)
 
         function state = onOff(~, enabled)
+            % Return the enabled or disabled UI state.
             state = 'off';
             if enabled
                 state = 'on';
@@ -314,6 +331,7 @@ classdef WatermarkApp < handle
         end
 
         function runAction(app, operation, message)
+            % Run an action and show errors in the app.
             if app.Busy
                 return;
             end
@@ -333,6 +351,7 @@ classdef WatermarkApp < handle
         end
 
         function finishAction(app)
+            % Restore controls after an action finishes.
             app.Busy = false;
             if isgraphics(app.Window)
                 app.Window.Pointer = 'arrow';
@@ -341,6 +360,7 @@ classdef WatermarkApp < handle
         end
 
         function setStatus(app, message)
+            % Show a short message at the bottom of the window.
             app.StatusLabel.Text = message;
         end
 
@@ -361,11 +381,13 @@ classdef WatermarkApp < handle
         refreshTechnicalSummary(app)
 
         function copySummary(app)
+            % Copy the result summary to the clipboard.
             clipboard('copy', app.LastSummary);
             app.setStatus('Technical summary copied.');
         end
 
         function openSavedFolder(app)
+            % Open the folder that holds the saved PNG.
             if isempty(app.LastSavedPath)
                 return;
             end
@@ -380,6 +402,7 @@ classdef WatermarkApp < handle
 
         function [filename, folder] = chooseFile( ...
                 ~, mode, title, defaultName, defaultFolder)
+            % Open a movable system file picker above the app.
             % A movable native dialog stays above the visible app.
             if nargin < 4
                 defaultName = '';
@@ -420,6 +443,7 @@ classdef WatermarkApp < handle
         end
 
         function handleShortcut(app, event)
+            % Run an action from a keyboard shortcut.
             modifiers = event.Modifier;
             primaryKey = any(strcmp(modifiers, 'control')) || ...
                 any(strcmp(modifiers, 'command'));
@@ -448,6 +472,7 @@ classdef WatermarkApp < handle
         end
 
         function closeWindow(app)
+            % Close the app window.
             if app.Busy
                 uialert(app.Window, ...
                     'Wait for the current action to finish.', ...

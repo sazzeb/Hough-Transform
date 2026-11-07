@@ -1,4 +1,5 @@
 function setPreviewScale(app, name, useActualPixels)
+    % Switch a preview between fit and actual pixel size.
     imageData = app.Images.(name);
     if isempty(imageData)
         return;

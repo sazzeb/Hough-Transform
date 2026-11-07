@@ -1,5 +1,6 @@
 
 classdef HaarTransform
+    % Convert image blocks to and from Haar wavelet values.
     properties (Constant, Access = private)
         Matrix = [ ...
             1  1  1  1; ...
@@ -11,6 +12,7 @@ classdef HaarTransform
 
     methods (Static)
         function coefficients = forward(blocks)
+            % Turn 2-by-2 pixel blocks into Haar wavelet values.
             validateattributes(blocks, {'numeric'}, ...
                 {'2d', 'ncols', 4, 'real', 'finite'});
 
@@ -18,6 +20,7 @@ classdef HaarTransform
         end
 
         function blocks = inverse(coefficients)
+            % Turn Haar wavelet values back into pixel blocks.
             validateattributes(coefficients, {'numeric'}, ...
                 {'2d', 'ncols', 4, 'real', 'finite'});
 

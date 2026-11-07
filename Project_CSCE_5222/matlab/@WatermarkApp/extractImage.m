@@ -1,4 +1,5 @@
 function extractImage(app)
+    % Recover a watermark and show the result.
     if isempty(app.Images.watermarked)
         error('Watermark:Input', ...
             'Choose a watermarked PNG first.');

@@ -1,4 +1,5 @@
 function showStage(app, name, imageData)
+    % Draw an image inside a process step card.
     axesHandle = app.StageAxes.(name);
     cla(axesHandle);
     if isempty(imageData)

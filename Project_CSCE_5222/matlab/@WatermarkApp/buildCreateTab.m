@@ -1,4 +1,5 @@
 function buildCreateTab(app, tab)
+    % Add image choices, watermark settings, and save buttons.
     layout = uigridlayout(tab, [19 1]);
     layout.Scrollable = 'on';
     layout.RowHeight = {30, 37, 24, 37, 37, 57, 24, ...

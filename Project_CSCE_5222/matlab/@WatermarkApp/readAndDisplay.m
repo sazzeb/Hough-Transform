@@ -1,4 +1,5 @@
 function readAndDisplay(app, name, path)
+    % Load the chosen image and update its preview.
     imageData = ImageStore.read(path, strcmp(name, 'watermarked'));
     sourceInfo = imfinfo(path);
     app.PreviewOnly = false;

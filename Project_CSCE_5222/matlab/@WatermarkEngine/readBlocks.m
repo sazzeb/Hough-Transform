@@ -1,4 +1,5 @@
 function blocks = readBlocks(imageData, blockCount, channel)
+    % Read 2-by-2 pixel blocks for the classic mode.
     if nargin < 3
         channel = 1;
         if ndims(imageData) == 3

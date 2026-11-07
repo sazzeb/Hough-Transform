@@ -1,4 +1,5 @@
 function rate = bitErrorRate(original, recovered)
+    % Count wrong bits in the recovered watermark.
     WatermarkEngine.validateImage(original);
     WatermarkEngine.validateImage(recovered);
     if ~isequal(size(original), size(recovered))

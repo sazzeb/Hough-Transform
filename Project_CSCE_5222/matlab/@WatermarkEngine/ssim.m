@@ -1,5 +1,5 @@
 function score = ssim(original, modified)
-    %SSIM Mean structural similarity over nonoverlapping 8x8 blocks.
+    % Compare local image structure in 8-by-8 blocks.
     WatermarkEngine.validateImage(original);
     WatermarkEngine.validateImage(modified);
     if ~isequal(size(original), size(modified))

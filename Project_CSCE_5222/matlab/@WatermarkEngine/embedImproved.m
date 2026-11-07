@@ -1,4 +1,5 @@
 function result = embedImproved(cover, prepared, strength, mode)
+    % Spread and repeat watermark bits for added protection.
     repeats = 3;
     flags = 3;
     if strcmp(mode, 'durable')

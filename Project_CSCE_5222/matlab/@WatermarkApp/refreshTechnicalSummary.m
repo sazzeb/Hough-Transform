@@ -1,4 +1,5 @@
 function refreshTechnicalSummary(app)
+    % Write a simple summary of the current result.
     [valid, strength, side, ~] = app.settings();
     lines = {'WAVELET WATERMARK SUMMARY', ''};
     if ~isempty(app.Images.cover)

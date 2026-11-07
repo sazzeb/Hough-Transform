@@ -8,6 +8,7 @@ from .theme import PALETTE
 
 
 class ImagePreview(tk.Frame):
+    """Show an image at a readable size inside one card."""
     def __init__(
         self,
         parent,
@@ -16,6 +17,7 @@ class ImagePreview(tk.Frame):
         placeholder="Choose an image to preview",
         description=None,
     ):
+        """Build the card and its drawing area."""
         super().__init__(
             parent,
             bg=PALETTE["surface"],
@@ -79,6 +81,7 @@ class ImagePreview(tk.Frame):
         )
 
     def set_image(self, array):
+        """Keep the new image and redraw it."""
         self.source = (
             None
             if array is None
@@ -96,6 +99,7 @@ class ImagePreview(tk.Frame):
         self._redraw()
 
     def _schedule_redraw(self, _event):
+        """Wait briefly before redrawing during a resize."""
         if self.resize_job is not None:
             self.after_cancel(self.resize_job)
 
@@ -105,6 +109,7 @@ class ImagePreview(tk.Frame):
         )
 
     def _redraw(self):
+        """Fit the image in the available canvas space."""
         if self.resize_job is not None:
             self.after_cancel(self.resize_job)
             self.resize_job = None
@@ -162,6 +167,7 @@ class ImagePreview(tk.Frame):
         )
 
     def destroy(self):
+        """Cancel a pending redraw and release the image."""
         if self.resize_job is not None:
             self.after_cancel(self.resize_job)
 

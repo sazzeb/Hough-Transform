@@ -1,3 +1,5 @@
+"""Check the engine, image storage, examples, and GUI."""
+
 from pathlib import Path
 import gc
 import io
@@ -22,7 +24,9 @@ from watermark_core import (
 
 
 class EngineTests(unittest.TestCase):
+    """Check watermark math, recovery, and damage cases."""
     def setUp(self):
+        """Make a repeatable watermark for each test."""
         self.random = np.random.default_rng(42)
 
         self.mark = self.random.integers(
@@ -33,6 +37,7 @@ class EngineTests(unittest.TestCase):
         )
 
     def test_haar_inverse(self):
+        """Check that inverse Haar restores the original blocks."""
         blocks = self.random.integers(
             0,
             256,
@@ -47,6 +52,7 @@ class EngineTests(unittest.TestCase):
         )
 
     def test_evaluation_metrics_have_known_reference_values(self):
+        """Check scores against values we can calculate by hand."""
         cover = np.full((8, 8, 3), 100, dtype=np.uint8)
         self.assertEqual(WatermarkEngine.ssim(cover, cover), 1.0)
         self.assertEqual(WatermarkEngine.psnr(cover, cover), float("inf"))
@@ -70,6 +76,7 @@ class EngineTests(unittest.TestCase):
         )))
 
     def test_robustness_study_reports_exact_and_unreadable_cases(self):
+        """Check that the study reports good and failed recoveries."""
         cover = np.full((192, 192), 128, dtype=np.uint8)
         watermark = np.arange(256, dtype=np.uint8).reshape(16, 16)
         report = WatermarkEngine.evaluate_robustness(cover, watermark)
@@ -86,6 +93,7 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(all(0 <= row[4] <= 1 for row in report["summary"]))
 
     def test_improved_modes_preserve_shape_and_recover_from_channel_damage(self):
+        """Check improved modes survive one damaged color channel."""
         wide_mark = np.full((16, 32), 70, dtype=np.uint8)
         fitted = WatermarkEngine.prepare_watermark(wide_mark, (32, 32))
         self.assertTrue(np.all(fitted[:8] == 255))
@@ -109,6 +117,7 @@ class EngineTests(unittest.TestCase):
                 self.assertGreater(changed_rows.max(), 400)
 
     def test_balanced_fixture_matches_matlab(self):
+        """Check Python matches MATLAB for a known image."""
         cover = np.full((512, 512, 3), 128, dtype=np.uint8)
         mark = np.arange(256, dtype=np.uint8).reshape(16, 16)
         result = WatermarkEngine.embed(
@@ -123,6 +132,7 @@ class EngineTests(unittest.TestCase):
         )
 
     def test_durable_mode_reports_lossy_edit_limits(self):
+        """Check how durable mode responds to lossy edits."""
         cover = self.random.integers(
             0, 256, (512, 512, 3), dtype=np.uint8
         )
@@ -152,6 +162,7 @@ class EngineTests(unittest.TestCase):
             WatermarkEngine.extract(cropped)
 
     def test_durable_mode_marks_uncorrectable_payload_as_approximate(self):
+        """Check heavy damage is marked as approximate."""
         cover = np.full((512, 512), 128, np.uint8)
         mark = np.arange(256, dtype=np.uint8).reshape(16, 16)
         embedded = WatermarkEngine.embed(
@@ -180,6 +191,7 @@ class EngineTests(unittest.TestCase):
         )
 
     def test_prefix_blocks_match_the_full_image(self):
+        """Check reading needed blocks matches reading the full image."""
         image = self.random.integers(
             0, 256, (257, 259, 3), dtype=np.uint8
         )
@@ -200,6 +212,7 @@ class EngineTests(unittest.TestCase):
         )
 
     def test_all_strengths_and_extreme_images(self):
+        """Check every strength with dark, bright, and mixed covers."""
         cases = 0
 
         shapes = (
@@ -301,6 +314,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(cases, 300)
 
     def test_sizes_and_capacity(self):
+        """Check watermark sizes against cover capacity."""
         sizes = (
             (8, 8),
             (8, 31),
@@ -354,6 +368,7 @@ class EngineTests(unittest.TestCase):
             )
 
     def test_invalid_inputs_and_options(self):
+        """Check that bad inputs are rejected clearly."""
         cover = np.full(
             (256, 256),
             128,
@@ -415,6 +430,7 @@ class EngineTests(unittest.TestCase):
         WatermarkEngine.validate_image(large)
 
     def test_no_watermark_and_too_small(self):
+        """Check images without enough stored data are rejected."""
         for shape in (
             (1, 1),
             (16, 16),
@@ -427,6 +443,7 @@ class EngineTests(unittest.TestCase):
 
     @staticmethod
     def flip_slots(image, positions, strength):
+        """Change selected Haar values to simulate damage."""
         coefficients = HaarTransform.forward(
             WatermarkEngine._blocks(image)
         )
@@ -442,6 +459,7 @@ class EngineTests(unittest.TestCase):
         )
 
     def test_repetition_repairs_one_copy(self):
+        """Check repeated bits repair one damaged copy."""
         result = WatermarkEngine.embed(
             np.full((256, 256), 128, np.uint8),
             self.mark,
@@ -461,6 +479,7 @@ class EngineTests(unittest.TestCase):
         )
 
     def test_payload_damage_is_detected(self):
+        """Check payload damage fails the checksum."""
         result = WatermarkEngine.embed(
             np.full((256, 256), 128, np.uint8),
             self.mark,
@@ -482,6 +501,7 @@ class EngineTests(unittest.TestCase):
             WatermarkEngine.extract(altered)
 
     def test_header_damage_is_detected(self):
+        """Check that a damaged header is rejected."""
         result = WatermarkEngine.embed(
             np.full((256, 256), 128, np.uint8),
             self.mark,
@@ -500,6 +520,7 @@ class EngineTests(unittest.TestCase):
             WatermarkEngine.extract(altered)
 
     def test_incomplete_image_is_rejected(self):
+        """Check that missing payload data is reported."""
         result = WatermarkEngine.embed(
             np.full((256, 256), 128, np.uint8),
             self.mark,
@@ -511,6 +532,7 @@ class EngineTests(unittest.TestCase):
             )
 
     def test_golden_vector(self):
+        """Check a known result stays byte-for-byte compatible."""
         cover = (
             (np.arange(65536) % 256)
             .astype(np.uint8)
@@ -558,14 +580,18 @@ class EngineTests(unittest.TestCase):
 
 
 class StorageTests(unittest.TestCase):
+    """Check image loading and safe PNG saving."""
     def setUp(self):
+        """Create a temporary folder for image files."""
         self.folder = tempfile.TemporaryDirectory()
         self.path = Path(self.folder.name)
 
     def tearDown(self):
+        """Remove temporary files after each test."""
         self.folder.cleanup()
 
     def test_png_round_trip(self):
+        """Check saving and reopening keeps every pixel."""
         random = np.random.default_rng(7)
 
         mark = random.integers(
@@ -624,6 +650,7 @@ class StorageTests(unittest.TestCase):
             )
 
     def test_palette_transparency_and_binary(self):
+        """Check palette, alpha, and black-and-white inputs."""
         palette = Image.new(
             "P",
             (8, 8),
@@ -678,6 +705,7 @@ class StorageTests(unittest.TestCase):
         )
 
     def test_rejected_files(self):
+        """Check that unsupported image files are rejected."""
         (self.path / "broken.png").write_bytes(
             b"not an image"
         )
@@ -725,6 +753,7 @@ class StorageTests(unittest.TestCase):
             )
 
     def test_large_inputs_are_resized_without_changing_the_source(self):
+        """Check large images shrink without changing the source file."""
         path = self.path / "small.png"
         Image.new("RGB", (8, 8), (20, 40, 60)).save(path)
 
@@ -736,6 +765,7 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(original.size, (8, 8))
 
     def test_source_safety_limit_is_checked_before_decoding(self):
+        """Check oversized images are rejected before decoding."""
         path = self.path / "small.png"
         Image.new("RGB", (4, 4)).save(path)
 
@@ -746,6 +776,7 @@ class StorageTests(unittest.TestCase):
                 ImageStore.read(path)
 
     def test_oversized_original_is_not_treated_as_a_saved_watermark(self):
+        """Check a large original is not treated as a saved result."""
         path = self.path / "original.png"
         Image.new("RGB", (4, 4)).save(path)
 
@@ -756,6 +787,7 @@ class StorageTests(unittest.TestCase):
                 ImageStore.read(path, watermarked=True)
 
     def test_failed_save_preserves_existing_file(self):
+        """Check a failed save leaves the old file intact."""
         target = self.path / "existing.png"
 
         original = np.full(
@@ -788,7 +820,9 @@ class StorageTests(unittest.TestCase):
 
 
 class ExampleGalleryTests(unittest.TestCase):
+    """Check the shuffled example images."""
     def test_every_photo_loads_and_recovers_in_a_shuffled_round(self):
+        """Check each bundled photo works once in a shuffled round."""
         gallery = ExampleGallery(rng=random.Random(7))
         self.assertGreaterEqual(len(gallery.entries), 10)
         previous = None
@@ -834,8 +868,10 @@ class ExampleGalleryTests(unittest.TestCase):
 
 
 class GuiTests(unittest.TestCase):
+    """Check the main GUI flows and state changes."""
     @classmethod
     def setUpClass(cls):
+        """Create one Tk root for the GUI tests."""
         try:
             cls.master = tk.Tk()
 
@@ -848,9 +884,11 @@ class GuiTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        """Close the shared Tk root."""
         cls.master.destroy()
 
     def setUp(self):
+        """Create a fresh app for each test."""
         self.root = self.master
         self.root.withdraw()
         self.app = WatermarkApp(self.root)
@@ -859,6 +897,7 @@ class GuiTests(unittest.TestCase):
         self.path = Path(self.folder.name)
 
     def tearDown(self):
+        """Close the app after each test."""
         if hasattr(self, "app"):
             self.app.executor.shutdown(
                 wait=True,
@@ -873,6 +912,7 @@ class GuiTests(unittest.TestCase):
             gc.collect()
 
     def finish(self):
+        """Wait for background GUI work to finish."""
         deadline = time.monotonic() + 15
 
         while (
@@ -890,6 +930,7 @@ class GuiTests(unittest.TestCase):
         self.root.update()
 
     def test_complete_workflow(self):
+        """Check loading, embedding, recovery, and saving in the GUI."""
         cover = np.full(
             (256, 256, 3),
             128,
@@ -1002,6 +1043,7 @@ class GuiTests(unittest.TestCase):
             error.assert_not_called()
 
     def test_strength_slider_previews_and_commits_full_image(self):
+        """Check slider previews and the full image after release."""
         cover = np.full((768, 768, 3), 128, np.uint8)
         mark = np.full((16, 16), 80, np.uint8)
         self.app.images["cover"] = cover
@@ -1028,6 +1070,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(str(self.app.buttons["save_image"]["state"]), "normal")
 
     def test_example_and_failed_reload_keep_the_previous_result(self):
+        """Check a failed reload keeps the previous result."""
         with patch("watermark_app.messagebox.showerror") as error:
             self.app.try_sample()
             self.finish()
@@ -1074,6 +1117,7 @@ class GuiTests(unittest.TestCase):
             self.assertIn("Save watermarked PNG", error.call_args.args[1])
 
     def test_example_button_completes_a_full_shuffled_round(self):
+        """Check the button visits every example once."""
         self.app.example_gallery = ExampleGallery(rng=random.Random(7))
         seen = set()
         with patch("watermark_app.messagebox.showerror") as error:
@@ -1088,6 +1132,7 @@ class GuiTests(unittest.TestCase):
         error.assert_not_called()
 
     def test_evaluation_tables_use_the_selected_image_pair(self):
+        """Check study tables use the selected images."""
         self.app.images["cover"] = np.full((192, 192), 128, dtype=np.uint8)
         self.app.images["watermark"] = np.arange(
             256, dtype=np.uint8
@@ -1102,6 +1147,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(len(self.app.study_details.get_children()), 0)
 
     def test_preview_resizing_keeps_status_visible(self):
+        """Check resized previews keep the status readable."""
         self.root.deiconify()
         self.root.geometry("850x650")
         self.root.update()
@@ -1156,6 +1202,7 @@ class GuiTests(unittest.TestCase):
         )
 
     def test_cancellation_and_worker_error(self):
+        """Check canceled dialogs and worker errors leave the GUI usable."""
         with patch(
             "watermark_app.filedialog.askopenfilename",
             return_value="",

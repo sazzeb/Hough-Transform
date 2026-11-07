@@ -1,4 +1,5 @@
 function loadWithDialog(app, name)
+    % Ask the user to choose an image file.
     suggestedName = '';
     suggestedFolder = '';
     dialogTitle = ['Choose ' name];

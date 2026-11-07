@@ -1,4 +1,5 @@
 function refreshComparison(app)
+    % Show the original, marked, or difference image.
     compared = [];
     original = app.Images.cover;
     if app.PreviewOnly

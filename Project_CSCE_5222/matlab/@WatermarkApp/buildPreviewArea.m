@@ -1,4 +1,5 @@
 function buildPreviewArea(app, workspace)
+    % Arrange the process steps, scores, and image previews.
     right = uigridlayout(workspace, [7 1]);
     app.RightLayout = right;
     right.Layout.Column = 2;

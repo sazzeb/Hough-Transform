@@ -1,4 +1,5 @@
 function addStatusCard(app, parent, column, title, value, name)
+    % Create a small box that shows current progress.
     card = uipanel(parent, 'BorderType', 'line', ...
         'BackgroundColor', [1 1 1]);
     card.Layout.Column = column;

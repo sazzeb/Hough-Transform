@@ -1,4 +1,5 @@
 function [horizontal, vertical] = haarDetails(~, imageData)
+    % Get the horizontal and vertical Haar detail values.
     values = double(imageData);
     if ndims(values) == 3
         values = 0.299*values(:,:,1) + ...

@@ -1,4 +1,5 @@
 function buildHeader(~, page)
+    % Draw the title bar at the top of the app.
     header = uipanel(page, 'BorderType', 'none', ...
         'BackgroundColor', [38 100 53]/255);
     header.Layout.Row = 1;

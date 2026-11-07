@@ -10,6 +10,7 @@ from watermark_core import WatermarkEngine
 
 
 def main() -> None:
+    """Embed and save a sample, then check its recovered watermark."""
     folder = Path(__file__).resolve().parent
     cover, watermark = load_sample_images()
     result = WatermarkEngine.embed(cover, watermark)

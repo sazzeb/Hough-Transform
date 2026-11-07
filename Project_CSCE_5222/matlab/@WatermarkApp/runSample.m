@@ -1,4 +1,5 @@
 function runSample(app)
+    % Load a shuffled example and create its watermark.
     example = app.Gallery.nextExample();
     [app.Images.cover, app.Images.watermark] = ...
         app.Gallery.loadExample(example);

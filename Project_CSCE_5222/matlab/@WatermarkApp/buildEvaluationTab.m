@@ -1,4 +1,5 @@
 function buildEvaluationTab(app, tab)
+    % Add tables for testing changed images.
     layout = uigridlayout(tab, [6 1]);
     layout.Scrollable = 'on';
     layout.RowHeight = {30, 145, 40, 170, 260, 110};

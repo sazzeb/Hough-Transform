@@ -1,3 +1,5 @@
+"""Prepare, embed, extract, and measure image watermarks."""
+
 import io
 import math
 import struct
@@ -17,6 +19,7 @@ from .transform import HaarTransform
 
 
 class WatermarkEngine:
+    """Hide and recover watermarks in Haar wavelet details."""
     MAGIC = b"WVM1"
     IMPROVED_MAGIC = b"WVM2"
     SCATTERED = 1
@@ -30,6 +33,7 @@ class WatermarkEngine:
 
     @staticmethod
     def validate_image(image: ImageArray) -> None:
+        """Check for a nonempty 8-bit grayscale or RGB image."""
         if not isinstance(image, np.ndarray) or image.dtype != np.uint8:
             raise WatermarkError("Use a uint8 NumPy image.")
 
@@ -49,6 +53,7 @@ class WatermarkEngine:
         high: int,
         name: str,
     ) -> int:
+        """Check that a setting is a whole number in range."""
         if isinstance(value, (bool, np.bool_)) or not isinstance(
             value, (int, np.integer)
         ):
@@ -68,6 +73,7 @@ class WatermarkEngine:
         image: ImageArray,
         size: tuple[int, int] = (32, 32),
     ) -> ImageArray:
+        """Fit an image into a small grayscale watermark."""
         WatermarkEngine.validate_image(image)
 
         if not isinstance(size, (tuple, list)) or len(size) != 2:
@@ -134,6 +140,7 @@ class WatermarkEngine:
 
     @staticmethod
     def capacity_bytes(image: ImageArray, mode: str = "classic") -> int:
+        """Count how many watermark bytes the cover can hold."""
         WatermarkEngine.validate_image(image)
 
         slots = (
@@ -153,6 +160,7 @@ class WatermarkEngine:
         count: int | None = None,
         channel: int = 0,
     ) -> NDArray[np.float64]:
+        """Read 2-by-2 pixel blocks from the cover."""
         plane = image if image.ndim == 2 else image[:, :, channel]
 
         width = 2 * (plane.shape[1] // 2)
@@ -194,6 +202,7 @@ class WatermarkEngine:
         blocks: NDArray,
         channel: int = 0,
     ) -> ImageArray:
+        """Put changed 2-by-2 blocks back into the image."""
         output = image.copy()
 
         plane = output if output.ndim == 2 else output[:, :, channel]
@@ -226,6 +235,7 @@ class WatermarkEngine:
 
     @staticmethod
     def _block_indices(image: ImageArray, count: int) -> NDArray[np.int64]:
+        """Spread payload blocks across the cover."""
         blocks_per_row = image.shape[1] // 2
         available = (image.shape[0] // 2) * blocks_per_row
         header_blocks = WatermarkEngine.HEADER_SLOTS // 2
@@ -242,6 +252,7 @@ class WatermarkEngine:
         indices: NDArray[np.int64],
         channel: int,
     ) -> NDArray[np.float64]:
+        """Read the blocks chosen for payload bits."""
         plane = image if image.ndim == 2 else image[:, :, channel]
         columns = plane.shape[1] // 2
         rows = 2 * (indices // columns)
@@ -258,6 +269,7 @@ class WatermarkEngine:
         blocks: NDArray[np.float64],
         channel: int,
     ) -> None:
+        """Write changed payload blocks back into the image."""
         plane = image if image.ndim == 2 else image[:, :, channel]
         columns = plane.shape[1] // 2
         rows = 2 * (indices // columns)
@@ -274,6 +286,7 @@ class WatermarkEngine:
     def _adaptive_strengths(
         coefficients: NDArray[np.float64], strength: int
     ) -> NDArray[np.int64]:
+        """Choose each block's strength from its image detail."""
         quiet_strength = max(8, int(math.floor(0.75 * strength + 0.5)))
         return np.where(
             np.abs(coefficients[:, 3]) < 16,
@@ -285,7 +298,7 @@ class WatermarkEngine:
     def _stabilize_adaptive_details(
         coefficients: NDArray[np.float64], quiet: NDArray[np.bool_]
     ) -> None:
-        """Keep the texture decision stable after inverse transform rounding."""
+        """Keep detail choices stable after pixel rounding."""
         details = coefficients[:, 3]
         details[quiet] = np.clip(details[quiet], -12, 12)
         textured = ~quiet
@@ -295,6 +308,7 @@ class WatermarkEngine:
 
     @staticmethod
     def _decode_channels(channels: list[bytes]) -> bytes:
+        """Vote across color channels to recover bytes."""
         if len(channels) == 1:
             return channels[0]
         bits = np.stack([
@@ -305,6 +319,7 @@ class WatermarkEngine:
 
     @staticmethod
     def _bits(data: bytes) -> NDArray[np.uint8]:
+        """Turn stored bytes into a stream of bits."""
         bits = np.unpackbits(
             np.frombuffer(data, dtype=np.uint8),
             bitorder="big",
@@ -318,6 +333,7 @@ class WatermarkEngine:
         bits: NDArray,
         strength: int,
     ) -> NDArray:
+        """Move Haar details to represent watermark bits."""
         return strength * (
             2 * np.floor(
                 (slots / strength - bits) / 2 + 0.5
@@ -331,6 +347,7 @@ class WatermarkEngine:
         byte_count: int,
         strength: int,
     ) -> bytes:
+        """Read bytes from Haar detail values."""
         bits = np.mod(
             np.floor(slots / strength + 0.5),
             2,
@@ -355,6 +372,7 @@ class WatermarkEngine:
         original: ImageArray,
         modified: ImageArray,
     ) -> float:
+        """Measure pixel change between the cover and marked image."""
         WatermarkEngine.validate_image(original)
         WatermarkEngine.validate_image(modified)
 
@@ -374,13 +392,14 @@ class WatermarkEngine:
 
     @staticmethod
     def ssim(original: ImageArray, modified: ImageArray) -> float:
-        """Mean luminance SSIM over nonoverlapping 8-by-8 blocks."""
+        """Compare local image structure in 8-by-8 blocks."""
         WatermarkEngine.validate_image(original)
         WatermarkEngine.validate_image(modified)
         if original.shape != modified.shape:
             raise WatermarkError("SSIM requires images with identical shapes.")
 
         def luminance(image: ImageArray) -> NDArray[np.float32]:
+            """Turn color pixels into grayscale values for SSIM."""
             if image.ndim == 2:
                 return image.astype(np.float32)
             values = image[:, :, 0].astype(np.float32) * np.float32(0.299)
@@ -418,7 +437,7 @@ class WatermarkEngine:
 
     @staticmethod
     def bit_error_rate(original: ImageArray, recovered: ImageArray) -> float:
-        """Fraction of unequal bits across all eight bits of each pixel."""
+        """Count wrong bits in the recovered watermark."""
         WatermarkEngine.validate_image(original)
         WatermarkEngine.validate_image(recovered)
         if original.shape != recovered.shape:
@@ -429,7 +448,7 @@ class WatermarkEngine:
     def normalized_correlation(
         original: ImageArray, recovered: ImageArray
     ) -> float:
-        """Uncentered normalized correlation of matching watermark pixels."""
+        """Measure how closely watermark pixel values line up."""
         WatermarkEngine.validate_image(original)
         WatermarkEngine.validate_image(recovered)
         if original.shape != recovered.shape:
@@ -441,6 +460,7 @@ class WatermarkEngine:
 
     @staticmethod
     def _study_change(image: ImageArray, change: str) -> ImageArray:
+        """Change an image for one recovery test."""
         if change == "Unchanged PNG":
             output = io.BytesIO()
             Image.fromarray(image).save(output, format="PNG")
@@ -473,7 +493,7 @@ class WatermarkEngine:
     def evaluate_robustness(
         cover: ImageArray, watermark: ImageArray
     ) -> dict:
-        """Measure exact recovery across fixed settings and image changes."""
+        """Test recovery after PNG, JPEG, crop, and resize changes."""
         WatermarkEngine.validate_image(cover)
         WatermarkEngine.validate_image(watermark)
         scale = min(1.0, 512 / max(cover.shape[:2]))
@@ -578,6 +598,7 @@ class WatermarkEngine:
         size: tuple[int, int] = (32, 32),
         mode: str = "classic",
     ) -> EmbeddingResult:
+        """Place the watermark in Haar details and check it."""
         WatermarkEngine.validate_image(cover)
 
         strength = WatermarkEngine._integer(
@@ -605,6 +626,7 @@ class WatermarkEngine:
                 "Choose a smaller watermark size or a larger cover."
             )
 
+        # The header records how to read and check the watermark.
         body = WatermarkEngine.HEADER.pack(
             WatermarkEngine.MAGIC,
             strength,
@@ -691,6 +713,7 @@ class WatermarkEngine:
         strength: int,
         mode: str,
     ) -> EmbeddingResult:
+        """Spread and repeat bits for extra damage protection."""
         repeats = 5 if mode == "durable" else 3
         flags = (
             WatermarkEngine.SCATTERED
@@ -773,6 +796,7 @@ class WatermarkEngine:
 
     @staticmethod
     def extract(image: ImageArray) -> ExtractionResult:
+        """Read the stored watermark and check its data."""
         WatermarkEngine.validate_image(image)
 
         split = WatermarkEngine.HEADER_SLOTS
@@ -788,6 +812,7 @@ class WatermarkEngine:
             )
 
         channels = 1 if image.ndim == 2 else 3
+        # Read the header first to learn the watermark size and settings.
         header_copies = []
         for channel in range(channels):
             header_blocks = WatermarkEngine._blocks(
@@ -851,6 +876,7 @@ class WatermarkEngine:
                 "image dimensions may have changed."
             )
 
+        # Recover the watermark bytes from the image channels.
         payload_copies = []
         if magic == WatermarkEngine.IMPROVED_MAGIC:
             indices = WatermarkEngine._block_indices(

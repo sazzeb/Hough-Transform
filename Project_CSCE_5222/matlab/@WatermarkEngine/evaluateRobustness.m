@@ -1,6 +1,6 @@
 function report = evaluateRobustness(cover, watermark, progress)
-    %EVALUATEROBUSTNESS Compare recovery under specified changes.
-    % The cover is fitted within 512 pixels to bound study runtime.
+    % Try PNG, JPEG, crop, and resize changes across several settings.
+    % Use a smaller cover so the study finishes in a reasonable time.
     if nargin < 3
         progress = [];
     end

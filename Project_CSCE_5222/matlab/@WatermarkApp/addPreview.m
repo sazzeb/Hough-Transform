@@ -1,4 +1,5 @@
 function addPreview(app, parent, name, title, row, column)
+    % Create a large image preview with fit and zoom buttons.
     card = uipanel(parent, 'BorderType', 'line', ...
         'BackgroundColor', [1 1 1]);
     card.Layout.Row = row;

@@ -1,3 +1,5 @@
+"""Run the GUI for creating and recovering image watermarks."""
+
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tkinter as tk
@@ -16,7 +18,9 @@ from .theme import PALETTE
 
 
 class WatermarkApp(AppLayout):
+    """Handle image choices, watermark actions, and app state."""
     def __init__(self, root: tk.Tk):
+        """Set up the window and starting values."""
         self.root = root
 
         self.root.title("Wavelet Watermark Studio")
@@ -75,6 +79,7 @@ class WatermarkApp(AppLayout):
         )
 
     def _update_controls(self):
+        """Enable only actions that are ready to use."""
         enabled = {
             "sample": True,
             "cover": True,
@@ -128,10 +133,12 @@ class WatermarkApp(AppLayout):
         )
 
     def _show(self, name, array):
+        """Send an image to its matching preview."""
         self.previews[name].set_image(array)
 
     @staticmethod
     def _haar_details(image):
+        """Get horizontal and vertical Haar detail values."""
         values = image[:512, :512].astype(np.float64)
         if values.ndim == 3:
             values = np.sum(
@@ -146,6 +153,7 @@ class WatermarkApp(AppLayout):
         return (a - b + c - d) / 2, (a + b - c - d) / 2
 
     def _refresh_evidence(self):
+        """Update process images and quality scores."""
         if not self.metric_values:
             return
         original = self.preview_cover if self.preview_only else self.images["cover"]
@@ -215,6 +223,7 @@ class WatermarkApp(AppLayout):
 
     @staticmethod
     def _embed_and_extract(cover, watermark, strength, side, mode="balanced"):
+        """Embed a watermark and recover it for a quick check."""
         embedded = WatermarkEngine.embed(
             cover, watermark, strength, (side, side), mode=mode
         )
@@ -223,6 +232,7 @@ class WatermarkApp(AppLayout):
 
     @staticmethod
     def _difference(original, changed):
+        """Make pixel changes easier to see."""
         difference = np.abs(
             original.astype(np.int16) - changed.astype(np.int16)
         )
@@ -232,6 +242,7 @@ class WatermarkApp(AppLayout):
 
     @staticmethod
     def _recovery_state(recovered, prepared):
+        """Turn data checks into a short recovery status."""
         if not recovered.verified:
             return "Checksum failed; approximate"
         if prepared is None:
@@ -241,6 +252,7 @@ class WatermarkApp(AppLayout):
         return "Verified, pixels differ"
 
     def _clear_evaluation(self):
+        """Clear old study results after inputs change."""
         for table in (self.study_summary, self.study_details):
             table.delete(*table.get_children())
         self.study_note.configure(
@@ -248,12 +260,14 @@ class WatermarkApp(AppLayout):
         )
 
     def run_evaluation(self):
+        """Test recovery after several image changes."""
         cover = self.images["cover"]
         watermark = self.images["watermark"]
         if self.busy or cover is None or watermark is None:
             return
 
         def display(report):
+            """Show the study results in the tables."""
             for row in report["summary"]:
                 values = list(row)
                 values[4] = f"{100 * values[4]:.1f}%"
@@ -292,9 +306,11 @@ class WatermarkApp(AppLayout):
         )
 
     def _selected_mode(self):
+        """Return the chosen embedding mode."""
         return self.mode.get().lower()
 
     def _strength_text_changed(self, *_args):
+        """Sync the slider when the strength text changes."""
         if self._syncing_strength:
             return
         try:
@@ -314,6 +330,7 @@ class WatermarkApp(AppLayout):
             self._syncing_strength = False
 
     def _strength_drag(self, value):
+        """Schedule a quick preview as the slider moves."""
         if self._syncing_strength:
             return
         percentage = int(round(float(value)))
@@ -337,6 +354,7 @@ class WatermarkApp(AppLayout):
         self.preview_job = self.root.after(150, self._show_strength_preview)
 
     def _show_strength_preview(self):
+        """Show a smaller result at the current strength."""
         self.preview_job = None
         if self.busy:
             self.preview_job = self.root.after(150, self._show_strength_preview)
@@ -356,6 +374,7 @@ class WatermarkApp(AppLayout):
             return
 
         def completed(result):
+            """Show the finished preview."""
             embedded, extracted = result
             self.preview_only = True
             self.preview_cover = crop
@@ -382,6 +401,7 @@ class WatermarkApp(AppLayout):
         )
 
     def _strength_release(self, _event):
+        """Create a full-size result after the drag ends."""
         if self.preview_job is not None:
             self.root.after_cancel(self.preview_job)
             self.preview_job = None
@@ -402,14 +422,17 @@ class WatermarkApp(AppLayout):
             self._refresh_full_from_slider()
 
     def _refresh_full_from_slider(self):
+        """Finish a pending full-size update."""
         self.pending_full_refresh = False
         self.embed()
 
     def _mode_changed(self, _event):
+        """Refresh the result when the embedding mode changes."""
         if self.images["cover"] is not None and self.images["watermark"] is not None:
             self._strength_release(None)
 
     def _display_embedding(self, embedded, extracted):
+        """Show the marked image and recovered watermark."""
         self.preview_only = False
         self.preview_cover = None
         self.recovery_verified = extracted.verified
@@ -439,6 +462,7 @@ class WatermarkApp(AppLayout):
         )
 
     def try_sample(self):
+        """Load a shuffled example and create its result."""
         if self.busy:
             return
 
@@ -446,6 +470,7 @@ class WatermarkApp(AppLayout):
         example = self.example_gallery.next_example()
 
         def operation():
+            """Load and embed one example in the background."""
             cover, watermark = load_example_images(example)
             embedded, extracted = WatermarkApp._embed_and_extract(
                 cover, watermark, 16, 32, mode
@@ -453,6 +478,7 @@ class WatermarkApp(AppLayout):
             return cover, watermark, embedded, extracted
 
         def completed(result):
+            """Show the finished example."""
             cover, watermark, embedded, extracted = result
             self._clear_evaluation()
             self.strength.set("16")
@@ -476,6 +502,7 @@ class WatermarkApp(AppLayout):
         on_success,
         message,
     ):
+        """Run a task without freezing the window."""
         if self.busy:
             return
 
@@ -488,6 +515,7 @@ class WatermarkApp(AppLayout):
         future = self.executor.submit(operation)
 
         def poll():
+            """Check whether the background task has finished."""
             if not future.done():
                 self.root.after(40, poll)
                 return
@@ -517,6 +545,7 @@ class WatermarkApp(AppLayout):
         self.root.after(40, poll)
 
     def load(self, name):
+        """Choose and load an image or a saved watermark PNG."""
         if self.busy:
             return
 
@@ -552,6 +581,7 @@ class WatermarkApp(AppLayout):
             return
 
         def operation():
+            """Read the chosen image in the background."""
             with Image.open(path) as source:
                 source_size = source.size
             image = ImageStore.read(
@@ -571,6 +601,7 @@ class WatermarkApp(AppLayout):
             return image, recovered, source_size
 
         def completed(result):
+            """Show the loaded image and refresh the app."""
             array, recovered, source_size = result
             self._clear_evaluation()
             self.preview_only = False
@@ -652,6 +683,7 @@ class WatermarkApp(AppLayout):
         )
 
     def embed(self):
+        """Create a marked image from the chosen image pair."""
         if (
             self.busy
             or self.images["cover"] is None
@@ -674,6 +706,7 @@ class WatermarkApp(AppLayout):
             return
 
         def completed(result):
+            """Show the finished marked image."""
             self._display_embedding(*result)
 
         cover = self.images["cover"]
@@ -691,6 +724,7 @@ class WatermarkApp(AppLayout):
         )
 
     def extract(self):
+        """Recover a watermark from the selected PNG."""
         if (
             self.busy
             or self.images["watermarked"] is None
@@ -699,6 +733,7 @@ class WatermarkApp(AppLayout):
             return
 
         def completed(result):
+            """Show the recovered watermark."""
             self.images["extracted"] = result.watermark
             self.recovery_verified = result.verified
             self.recovery_state = self._recovery_state(
@@ -731,6 +766,7 @@ class WatermarkApp(AppLayout):
         )
 
     def save(self, name):
+        """Save an image as PNG and check the saved pixels."""
         if (
             self.busy
             or self.images[name] is None
@@ -749,6 +785,7 @@ class WatermarkApp(AppLayout):
         if path:
             image = self.images[name]
             def operation():
+                """Write the chosen PNG in the background."""
                 saved = ImageStore.save_png(path, image)
                 recovered = None
 
@@ -761,6 +798,7 @@ class WatermarkApp(AppLayout):
                 return saved, recovered
 
             def completed(result):
+                """Show the saved result and its check."""
                 saved, recovered = result
 
                 if recovered is not None:
@@ -798,6 +836,7 @@ class WatermarkApp(AppLayout):
             )
 
     def _choose_file(self, dialog, **options):
+        """Open a movable file picker in front of the window."""
         if sys.platform == "darwin":
             # An owned macOS picker is a sheet and cannot be moved
             # independently. Use a standalone native dialog instead.
@@ -810,6 +849,7 @@ class WatermarkApp(AppLayout):
         return dialog(parent=self.root, **options)
 
     def close(self):
+        """Stop background work and close the window."""
         if self.busy:
             messagebox.showinfo(
                 "Operation in progress",
@@ -832,6 +872,7 @@ class WatermarkApp(AppLayout):
 
 
 def main():
+    """Open the watermark GUI."""
     root = tk.Tk()
     WatermarkApp(root)
     root.mainloop()

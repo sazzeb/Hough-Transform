@@ -12,9 +12,10 @@ from .engine import ImageArray
 
 
 class ExampleGallery:
-    """Shuffle every bundled photo once before starting another round."""
+    """Shuffle bundled photos so each appears once per round."""
 
     def __init__(self, catalog_path: Path | None = None, rng=None):
+        """Read the photo list and set up a shuffled round."""
         self.catalog_path = catalog_path or (
             Path(__file__).resolve().parents[2]
             / "matlab" / "source" / "images" / "catalog.json"
@@ -29,6 +30,7 @@ class ExampleGallery:
         self.last_index = None
 
     def next_example(self):
+        """Pick a new cover and another photo to hide."""
         if not self.remaining:
             self.remaining = list(range(len(self.entries)))
             self.random.shuffle(self.remaining)
@@ -52,7 +54,7 @@ class ExampleGallery:
 
 
 def load_example_images(example) -> tuple[ImageArray, ImageArray]:
-    """Load a photograph and make a compact square watermark from another."""
+    """Load the cover and make a small grayscale watermark."""
     cover = ImageStore.read(example["cover_path"])
     with Image.open(example["watermark_path"]) as source:
         watermark = ImageOps.fit(
@@ -62,7 +64,7 @@ def load_example_images(example) -> tuple[ImageArray, ImageArray]:
 
 
 def load_sample_images() -> tuple[ImageArray, ImageArray]:
-    """Return the supplied photograph and a separate, generated logo image."""
+    """Load the sample cover and draw a separate logo."""
     photograph = (
         Path(__file__).resolve().parents[2]
         / "matlab" / "source" / "images" / "sample_cover.jpg"

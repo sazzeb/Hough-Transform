@@ -1,5 +1,5 @@
 classdef ExampleGallery < handle
-    %EXAMPLEGALLERY Serve every bundled Unsplash photo in shuffled order.
+    % Shuffle and load the bundled example images.
 
     properties (SetAccess = private)
         Entries
@@ -10,6 +10,7 @@ classdef ExampleGallery < handle
 
     methods
         function gallery = ExampleGallery(catalogPath)
+            % Read the example list and check its image entries.
             if nargin == 0
                 projectFolder = fileparts(fileparts(mfilename('fullpath')));
                 catalogPath = fullfile(projectFolder, 'matlab', ...
@@ -27,6 +28,7 @@ classdef ExampleGallery < handle
         end
 
         function example = nextExample(gallery)
+            % Pick an example without repeating one in the round.
             if isempty(gallery.Remaining)
                 gallery.Remaining = randperm(numel(gallery.Entries));
                 if ~isempty(gallery.LastIndex) && ...
@@ -54,6 +56,7 @@ classdef ExampleGallery < handle
         end
 
         function [cover, watermark] = loadExample(~, example)
+            % Load a cover and make a watermark from another photo.
             cover = ImageStore.read(example.coverPath);
             watermarkPhoto = ImageStore.read(example.watermarkPath);
             side = min(size(watermarkPhoto, 1), size(watermarkPhoto, 2));

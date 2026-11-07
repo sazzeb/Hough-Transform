@@ -1,4 +1,5 @@
 function changed = applyStudyChange(imageData, changeIndex)
+    % Change an image for one recovery test.
     switch changeIndex
         case 1
             filename = [tempname '.png'];

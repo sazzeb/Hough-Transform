@@ -1,4 +1,5 @@
 function refreshEvidence(app)
+    % Update process images and scores for the current result.
     if isempty(fieldnames(app.StageAxes))
         return;
     end

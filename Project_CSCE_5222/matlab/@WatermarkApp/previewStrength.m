@@ -1,4 +1,5 @@
 function previewStrength(app, percentage)
+    % Show a quick result while the strength slider moves.
     if app.Busy
         return;
     end

@@ -1,4 +1,5 @@
 function refreshControls(app)
+    % Enable only the actions that are ready to use.
     [valid, ~, side, message] = app.settings();
     inputCount = double(~isempty(app.Images.cover)) + ...
         double(~isempty(app.Images.watermark));

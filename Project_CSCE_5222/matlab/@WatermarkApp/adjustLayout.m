@@ -1,4 +1,5 @@
 function adjustLayout(app)
+    % Resize the workspace when the window size changes.
     app.RootPanel.Position = [1 1 app.Window.Position(3:4)];
     if isempty(app.PreviewGrid) || ...
             ~isgraphics(app.PreviewGrid)

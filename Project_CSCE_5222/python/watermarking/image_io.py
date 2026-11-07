@@ -1,3 +1,5 @@
+"""Open source images and save verified PNG results."""
+
 import os
 from pathlib import Path
 import tempfile
@@ -14,7 +16,7 @@ from .engine import (
 
 
 class ImageStore:
-    """Read supported inputs and save verified, lossless PNG outputs."""
+    """Load images safely and save checked PNG results."""
 
     MAX_WORKING_PIXELS = 12_000_000
     MAX_SOURCE_PIXELS = 100_000_000
@@ -25,6 +27,7 @@ class ImageStore:
         path: str | Path,
         watermarked: bool = False,
     ) -> ImageArray:
+        """Open an image and convert it to safe 8-bit pixels."""
         path = Path(path)
 
         with Image.open(path) as source:
@@ -107,6 +110,7 @@ class ImageStore:
 
     @staticmethod
     def _as_array(source: Image.Image) -> ImageArray:
+        """Convert grayscale, color, or transparent input to an array."""
         if (
             source.mode in {"1", "L"}
             and "transparency" not in source.info
@@ -147,6 +151,7 @@ class ImageStore:
         path: str | Path,
         image: ImageArray,
     ) -> Path:
+        """Save a PNG and reopen it to check every pixel."""
         WatermarkEngine.validate_image(image)
 
         target = Path(path).expanduser().resolve()

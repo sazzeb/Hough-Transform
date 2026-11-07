@@ -1,5 +1,5 @@
 function runProjectChecks()
-%RUNPROJECTCHECKS Exercise watermark recovery and analyze all MATLAB files.
+% Run the recovery tests and check every MATLAB source file.
     projectFolder = fileparts(mfilename('fullpath'));
     testWatermarkProject();
 

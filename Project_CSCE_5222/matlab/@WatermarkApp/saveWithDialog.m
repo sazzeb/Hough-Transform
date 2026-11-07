@@ -1,4 +1,5 @@
 function saveWithDialog(app, name)
+    % Save a PNG and check that it opens with the same pixels.
     if app.PreviewOnly
         error('Watermark:Preview', ...
             'Release the strength slider to create the full image.');

@@ -1,4 +1,5 @@
 function score = normalizedCorrelation(original, recovered)
+    % Measure how closely the watermark pixels line up.
     WatermarkEngine.validateImage(original);
     WatermarkEngine.validateImage(recovered);
     if ~isequal(size(original), size(recovered))

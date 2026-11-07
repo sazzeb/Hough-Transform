@@ -1,4 +1,5 @@
 function output = writeBlocks(imageData, blocks, channel)
+    % Put changed 2-by-2 blocks back into the image.
     output = imageData;
     if nargin < 3
         channel = 1;

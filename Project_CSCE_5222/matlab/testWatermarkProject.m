@@ -1,6 +1,5 @@
 function testWatermarkProject()
-% Verify Haar-transform embedding and exact extraction from unchanged PNGs,
-% validation, PNG storage, alpha compositing, and palette-image support.
+% Check embedding, recovery, image loading, and saved PNGs.
     previousRandomState = rng;
 
     randomCleanup = onCleanup( ...
@@ -369,6 +368,7 @@ function testWatermarkProject()
 end
 
 function mustFail(operation)
+    % Confirm that a bad input raises a watermark error.
     failed = false;
 
     try
@@ -386,6 +386,7 @@ function mustFail(operation)
 end
 
 function output = flipSlots(imageData, positions, strength)
+    % Change chosen wavelet values to test damage recovery.
     output = imageData;
     blockColumns = floor(size(imageData, 2)/2);
 

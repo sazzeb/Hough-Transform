@@ -1,4 +1,5 @@
 function showImage(app, name, imageData)
+    % Show an image and its size in a preview.
     axesHandle = app.PreviewAxes.(name);
     cla(axesHandle);
 
